@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both runners install dtc, because the round-trip tests compare our
+        # output against it. Keeping the comparison on both platforms is what
+        # catches endianness and alignment differences that a single runner
+        # would hide.
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dtc
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            brew install dtc
+          else
+            sudo apt-get update
+            sudo apt-get install -y device-tree-compiler
+          fi
+
+      - name: Install MoonBit
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> $GITHUB_PATH
+
+      - name: Show toolchain versions
+        run: |
+          moon version --all
+          moonc -v
+          dtc --version
+
+      - name: Update dependencies
+        run: moon update
+
+      - name: Check formatting
+        run: moon fmt --check
+
+      - name: Check
+        run: moon check --deny-warn
+
+      - name: Test
+        run: moon test
+
+      - name: Regenerate fixtures and confirm they still match
+        run: ./tools/gen-fixtures.sh --check

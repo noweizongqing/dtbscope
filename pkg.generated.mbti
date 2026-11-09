@@ -1,0 +1,67 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "noweizongqing/dtbscope"
+
+// Values
+pub fn parse_header(Bytes) -> Header raise DtbError
+
+// Errors
+pub(all) suberror DtbError {
+  UnexpectedEnd(offset~ : Int64, needed~ : Int64, available~ : Int64)
+  BadMagic(magic~ : UInt32)
+  BadValue(field~ : String, value~ : Int64)
+  OutOfBounds(what~ : String, offset~ : Int64, size~ : Int64, limit~ : Int64)
+  BadName(offset~ : Int64)
+  Inconsistent(what~ : String, detail~ : String)
+  LimitExceeded(what~ : String, limit~ : Int64)
+  Unsupported(what~ : String)
+}
+pub fn DtbError::output(Self, &Logger) -> Unit
+pub fn DtbError::to_string(Self) -> String
+pub impl Show for DtbError
+
+// Types and methods
+pub(all) struct Bounds {
+  bytes : Bytes
+  start : Int64
+  limit : Int64
+}
+pub fn Bounds::cstr(Self, Int64, Int64) -> (String, Int64) raise DtbError
+pub fn Bounds::length(Self) -> Int64
+pub fn Bounds::of_bytes(Bytes) -> Self
+pub fn Bounds::of_range(Bytes, Int64, Int64) -> Self raise DtbError
+pub fn Bounds::read_u16(Self, Cursor) -> (UInt32, Cursor) raise DtbError
+pub fn Bounds::read_u32(Self, Cursor) -> (UInt32, Cursor) raise DtbError
+pub fn Bounds::read_u64(Self, Cursor) -> (Int64, Cursor) raise DtbError
+pub fn Bounds::read_u8(Self, Cursor) -> (UInt32, Cursor) raise DtbError
+pub fn Bounds::require(Self, Int64, Int64, String) -> Unit raise DtbError
+pub fn Bounds::slice(Self, Int64, Int64, String) -> Bytes raise DtbError
+
+pub(all) struct Cursor {
+  pos : Int64
+  endian : Endian
+}
+pub fn Cursor::big(Int64) -> Self
+pub fn Cursor::little(Int64) -> Self
+
+pub(all) enum Endian {
+  Little
+  Big
+}
+
+pub(all) struct Header {
+  totalsize : Int64
+  off_dt_struct : Int64
+  off_dt_strings : Int64
+  off_mem_rsvmap : Int64
+  version : UInt32
+  last_comp_version : UInt32
+  boot_cpuid_phys : UInt32
+  size_dt_strings : Int64
+  size_dt_struct : Int64
+}
+pub fn Header::is_modern(Self) -> Bool
+pub fn Header::size(Self) -> Int64
+
+// Type aliases
+
+// Traits

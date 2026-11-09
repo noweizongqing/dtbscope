@@ -1,0 +1,17 @@
+/dts-v1/;
+
+/ {
+	compatible = "dtbscope,minimal";
+	model = "dtbscope minimal board";
+	#address-cells = <1>;
+	#size-cells = <1>;
+
+	chosen {
+		bootargs = "console=ttyS0,115200";
+	};
+
+	memory@80000000 {
+		device_type = "memory";
+		reg = <0x80000000 0x10000000>;
+	};
+};
