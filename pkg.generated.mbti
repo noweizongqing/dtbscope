@@ -4,6 +4,8 @@ package "noweizongqing/dtbscope"
 // Values
 pub fn parse_header(Bytes) -> Header raise DtbError
 
+pub fn parse_source(String) -> SourceFile raise ParseError
+
 pub fn parse_struct(Bounds, Bounds) -> Tree raise DtbError
 
 // Errors
@@ -20,6 +22,28 @@ pub(all) suberror DtbError {
 pub fn DtbError::output(Self, &Logger) -> Unit
 pub fn DtbError::to_string(Self) -> String
 pub impl Show for DtbError
+
+pub(all) suberror LexerError {
+  UnexpectedChar(char~ : Char, span~ : Span)
+  UnterminatedComment(start~ : Span)
+  UnterminatedString(start~ : Span)
+  BadEscape(char~ : Char, span~ : Span)
+  BadNumber(text~ : String, span~ : Span)
+}
+pub fn LexerError::output(Self, &Logger) -> Unit
+pub fn LexerError::to_string(Self) -> String
+pub impl Show for LexerError
+
+pub(all) suberror ParseError {
+  Unexpected(token~ : TokenKind, expected~ : String, span~ : Span)
+  Lexical(inner~ : LexerError)
+  BadValue(detail~ : String, span~ : Span)
+  LimitExceeded(what~ : String, limit~ : Int32)
+  Unsupported(what~ : String, span~ : Span)
+}
+pub fn ParseError::output(Self, &Logger) -> Unit
+pub fn ParseError::to_string(Self) -> String
+pub impl Show for ParseError
 
 // Types and methods
 pub(all) struct Bounds {
@@ -64,11 +88,30 @@ pub(all) struct Header {
 pub fn Header::is_modern(Self) -> Bool
 pub fn Header::size(Self) -> Int64
 
+pub(all) struct Lexer {
+  source : String
+  mut pos : Int32
+  mut line : Int32
+  mut column : Int32
+  mut in_bytes : Bool
+}
+pub fn Lexer::at_end(Self) -> Bool
+pub fn Lexer::clone(Self) -> Self
+pub fn Lexer::new(String) -> Self
+pub fn Lexer::next(Self) -> Token raise LexerError
+pub fn Lexer::scan_hex_byte(Self, Span) -> TokenKind raise LexerError
+
 pub(all) struct Node {
   name : String
   properties : Array[Property]
   children : Array[Node]
 }
+
+pub(all) struct Parser {
+  lexer : Lexer
+  mut current : Token
+}
+pub fn Parser::new(String) -> Self raise ParseError
 
 pub(all) struct Property {
   name : String
@@ -76,7 +119,34 @@ pub(all) struct Property {
   offset : Int64
 }
 
-pub(all) enum Token {
+pub(all) struct SourceFile {
+  root : SourceNode
+  memreserves : Array[(UInt64, UInt64)]
+  is_plugin : Bool
+}
+
+pub(all) struct SourceNode {
+  name : String
+  mut labels : Array[String]
+  properties : Array[SourceProperty]
+  children : Array[SourceNode]
+}
+
+pub(all) struct SourceProperty {
+  name : String
+  value : Value
+  span : Span
+}
+
+pub(all) struct Span {
+  line : Int32
+  column : Int32
+}
+pub fn Span::output(Self, &Logger) -> Unit
+pub fn Span::to_string(Self) -> String
+pub impl Show for Span
+
+pub(all) enum StructTag {
   BeginNode
   EndNode
   Prop
@@ -84,9 +154,54 @@ pub(all) enum Token {
   End
 }
 
+pub(all) struct Token {
+  kind : TokenKind
+  span : Span
+}
+
+pub(all) enum TokenKind {
+  Ident(String)
+  String(String)
+  Number(UInt64)
+  LBrace
+  RBrace
+  LAngle
+  RAngle
+  LBracket
+  RBracket
+  LParen
+  RParen
+  Comma
+  Semicolon
+  Equals
+  Slash
+  Amp
+  Colon
+  Minus
+  HexByte(Byte)
+  Eof
+}
+pub fn TokenKind::output(Self, &Logger) -> Unit
+pub fn TokenKind::to_string(Self) -> String
+pub impl Show for TokenKind
+
 pub(all) struct Tree {
   root : Node
   warnings : Array[Warning]
+}
+
+pub(all) struct Value {
+  parts : Array[ValuePart]
+}
+
+pub(all) enum ValuePart {
+  Text(String)
+  Cells(Array[UInt64])
+  Bytes(Array[Byte])
+  Ref(String)
+  PathRef(String)
+  Refs(Array[ValuePart])
+  TypedCells(UInt64, Array[UInt64])
 }
 
 pub(all) enum Warning {

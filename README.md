@@ -32,7 +32,12 @@ are next.
 | Struct block walk (nodes, properties) | done |
 | Strings block lookup | done |
 | Nesting limit and cycle guard | done |
-| DTS parser | not started |
+| DTS lexer: identifiers, strings, numbers, comments | done |
+| DTS parser: nodes, properties, typed values | done |
+| Labels, `&label` and `&{/path}` references | done |
+| `/bits/` and `/memreserve/` | done |
+| DTB writer | not started |
+| Reference resolution (phandle assignment) | not started |
 | DTS emitter | not started |
 | Overlay application | not started |
 
@@ -60,8 +65,20 @@ verifies it still matches, which is what CI runs.
 | `reader.mbt` | Bounds-checked reads of the primitive types |
 | `header.mbt` | Blob header parse and validation |
 | `struct_block.mbt` | Token walk, node tree, structural warnings |
+| `dts_token.mbt` | Token kinds, spans, scanner state |
+| `dts_lex.mbt` | Character rules and token scanning |
+| `dts_parse.mbt` | Source grammar, value parsing, source tree |
 | `tools/gen-fixtures.sh` | Fixture regeneration |
 | `internal/fixtures/` | DTS sources and their compiled DTBs |
+
+## Scope
+
+The C preprocessor is out of scope. Kernel device tree sources use `#include`
+and macros, and the kernel's own build runs `cpp` before `dtc`; this library
+expects the same, so the input it takes is what `cpp` produced rather than the
+file as it sits in the tree. `/incbin/` is likewise refused: it would make the
+parse depend on files outside the source, and the resulting bytes depend on
+data the source does not contain.
 
 ## Acknowledgements
 

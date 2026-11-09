@@ -17,7 +17,7 @@
 /// is why `parse_struct` treats an unknown tag as an error rather than trying
 /// to guess a skip length: the format gives no way to know how long an unknown
 /// token is.
-pub(all) enum Token {
+pub(all) enum StructTag {
   /// `0x1`: a node named by the string that follows, 4-byte aligned.
   BeginNode
   /// `0x2`: the end of the innermost open node.
@@ -112,7 +112,7 @@ const MAX_DEPTH : Int32 = 64
 
 ///|
 /// Reads the tag at `offset` without consuming a payload.
-fn tag_at(bounds : Bounds, offset : Int64) -> Token raise DtbError {
+fn tag_at(bounds : Bounds, offset : Int64) -> StructTag raise DtbError {
   let (raw, _) = bounds.read_u32(Cursor::big(offset))
   match raw {
     0x1 => BeginNode
