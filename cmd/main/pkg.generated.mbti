@@ -1,0 +1,13 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "noweizongqing/dtbscope/cmd/main"
+
+// Values
+
+// Errors
+
+// Types and methods
+type Mode
+
+// Type aliases
+
+// Traits

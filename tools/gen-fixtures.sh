@@ -20,9 +20,13 @@ fi
 compiled=0
 failed=0
 
-for src in "$fixtures"/*.dts; do
+# `.pre.dts` files are already through cpp, so dtc is run with -I dts exactly
+# as for a plain source; the extension only marks provenance.
+for src in "$fixtures"/*.dts "$fixtures"/*.pre.dts; do
   [ -e "$src" ] || continue
-  out="${src%.dts}.dtb"
+  base="${src%.pre.dts}"
+  base="${base%.dts}"
+  out="$base.dtb"
   tmp="$(mktemp)"
   # -I dts -O dtb is the only direction needed for fixtures: the DTS sources
   # are the readable form and the DTB is what the tests parse.

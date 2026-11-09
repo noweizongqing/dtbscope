@@ -1,12 +1,20 @@
 // Generated using `moon info`, DON'T EDIT IT
 package "noweizongqing/dtbscope"
 
+import {
+  "moonbitlang/core/buffer",
+}
+
 // Values
+pub fn encode_blob(SourceFile) -> Bytes raise DtbError
+
 pub fn parse_header(Bytes) -> Header raise DtbError
 
 pub fn parse_source(String) -> SourceFile raise ParseError
 
 pub fn parse_struct(Bounds, Bounds) -> Tree raise DtbError
+
+pub fn resolve_references(SourceFile) -> SourceFile raise ResolveError
 
 // Errors
 pub(all) suberror DtbError {
@@ -44,6 +52,17 @@ pub(all) suberror ParseError {
 pub fn ParseError::output(Self, &Logger) -> Unit
 pub fn ParseError::to_string(Self) -> String
 pub impl Show for ParseError
+
+pub(all) suberror ResolveError {
+  UnknownLabel(label~ : String)
+  UnknownPath(path~ : String)
+  DuplicateLabel(label~ : String, first~ : String, second~ : String)
+  DuplicatePhandle(value~ : UInt32, first~ : String, second~ : String)
+  BadPhandle(value~ : UInt32, node~ : String)
+}
+pub fn ResolveError::output(Self, &Logger) -> Unit
+pub fn ResolveError::to_string(Self) -> String
+pub impl Show for ResolveError
 
 // Types and methods
 pub(all) struct Bounds {
@@ -87,6 +106,11 @@ pub(all) struct Header {
 }
 pub fn Header::is_modern(Self) -> Bool
 pub fn Header::size(Self) -> Int64
+
+pub(all) struct LabelTable {
+  labels : Map[String, String]
+  explicit : Map[String, UInt32]
+}
 
 pub(all) struct Lexer {
   source : String
@@ -145,6 +169,12 @@ pub(all) struct Span {
 pub fn Span::output(Self, &Logger) -> Unit
 pub fn Span::to_string(Self) -> String
 pub impl Show for Span
+
+pub(all) struct StringTable {
+  bytes : @buffer.Buffer
+  offsets : Map[String, Int32]
+}
+pub fn StringTable::new() -> Self
 
 pub(all) enum StructTag {
   BeginNode

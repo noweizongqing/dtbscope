@@ -212,11 +212,21 @@ fn Lexer::bump(self : Lexer) -> Unit {
 ///|
 /// Skips whitespace and comments. DTS has `//` line comments and `/* */`
 /// block comments, the same set C has minus the preprocessor cases.
+///
+/// A `#` at the start of a line is a preprocessor marker left behind by cpp,
+/// such as `# 1 "board.dts"`. Sources that were expanded before being handed
+/// here begin with several, and they carry no meaning once the expansion is
+/// done, so they are dropped here rather than being reported as a syntax
+/// error. A `#` anywhere else is part of a name such as `#address-cells`.
 fn Lexer::skip_trivia(self : Lexer) -> Unit raise LexerError {
   while !self.at_end() {
     let c = self.peek(0)
     if c == ' ' || c == '\t' || c == '\r' || c == '\n' {
       self.bump()
+    } else if c == '#' && self.at_line_start() && self.looks_like_line_marker() {
+      while !self.at_end() && self.peek(0) != '\n' {
+        self.bump()
+      }
     } else if c == '/' && self.peek(1) == '/' {
       while !self.at_end() && self.peek(0) != '\n' {
         self.bump()

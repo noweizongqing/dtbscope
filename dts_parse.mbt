@@ -709,7 +709,7 @@ fn Parser::parse_reference(self : Parser) -> ValuePart raise ParseError {
       while !self.at_eof() {
         if same_kind(self.current.kind, RBrace) {
           self.advance()
-          return PathRef("/" + join_path(parts))
+          return PathRef("/" + join_segments(parts))
         }
         match self.current.kind {
           Ident(seg) => {
@@ -742,7 +742,7 @@ fn Parser::parse_reference(self : Parser) -> ValuePart raise ParseError {
 
 ///|
 /// Joins path segments with slashes.
-fn join_path(parts : Array[String]) -> String {
+fn join_segments(parts : Array[String]) -> String {
   let buf = StringBuilder()
   let mut first = true
   for p in parts {

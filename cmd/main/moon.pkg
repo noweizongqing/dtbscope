@@ -1,0 +1,7 @@
+import {
+  "noweizongqing/dtbscope" @lib,
+  "moonbitlang/x/fs",
+  "moonbitlang/core/env",
+}
+
+pkgtype(kind: "executable")

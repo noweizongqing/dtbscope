@@ -153,6 +153,44 @@ pub fn Lexer::next(self : Lexer) -> Token raise LexerError {
 }
 
 ///|
+/// Whether the cursor is at the first non-blank position of a line.
+///
+/// Only used to recognise a preprocessor line marker, which is the one thing
+/// in this format that is positional rather than lexical: `#` elsewhere is
+/// part of a property name such as `#address-cells`.
+fn Lexer::at_line_start(self : Lexer) -> Bool {
+  let mut back = self.pos - 1
+  while back >= 0 {
+    let c = self.source.get_char(back).unwrap()
+    if c == '\n' {
+      return true
+    }
+    if c != ' ' && c != '\t' && c != '\r' {
+      return false
+    }
+    back = back - 1
+  }
+  true
+}
+
+///|
+/// Whether the `#` under the cursor starts a cpp line marker.
+///
+/// `# 1 "file.dts"` and `# 42 "header.h" 2` both continue with whitespace and
+/// a digit. A property name such as `#address-cells` continues with a letter,
+/// so the two are told apart by what follows the `#`, not by position alone —
+/// preprocessed sources put `#address-cells` at the start of a line as often
+/// as anything else, and dropping those loses real properties.
+fn Lexer::looks_like_line_marker(self : Lexer) -> Bool {
+  let mut at = 1
+  while self.peek(at) == ' ' || self.peek(at) == '\t' {
+    at = at + 1
+  }
+  let c = self.peek(at)
+  c >= '0' && c <= '9'
+}
+
+///|
 /// Compares punctuation kinds, which carry no payload.
 fn same_punct(a : TokenKind, b : TokenKind) -> Bool {
   match (a, b) {

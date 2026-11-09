@@ -36,8 +36,10 @@ are next.
 | DTS parser: nodes, properties, typed values | done |
 | Labels, `&label` and `&{/path}` references | done |
 | `/bits/` and `/memreserve/` | done |
-| DTB writer | not started |
-| Reference resolution (phandle assignment) | not started |
+| DTB writer | done |
+| Byte-identical to dtc on all three fixtures | done |
+| CLI: compile and dump modes | done |
+| Reference resolution, phandle assignment | done |
 | DTS emitter | not started |
 | Overlay application | not started |
 
@@ -47,10 +49,24 @@ are next.
 moon test
 ```
 
-Two fixtures: `minimal.dtb` is a flat board tree, `nested.dtb` has a CPU
+Encode a source file and compare it with dtc:
+
+```sh
+moon run cmd/main -- internal/fixtures/nested.dts -o /tmp/out.dtb
+dtc -q -I dts -O dtb -o /tmp/dtc.dtb internal/fixtures/nested.dts
+cmp /tmp/out.dtb /tmp/dtc.dtb
+```
+
+Three fixtures. `minimal.dtb` is a flat board tree; `nested.dtb` has a CPU
 subtree, an interrupt controller with a phandle and a `ranges` property that
-encodes to nothing. Both are checked node by node against
-`dtc -I dtb -O dts` on the same bytes.
+encodes to nothing; `realview-pb1176` is the ARM RealView PB1176 from the Linux
+tree, 68 nodes with aliases, dma-ranges and 14 phandles. All three are compared
+byte for byte against dtc, and node by node against `dtc -I dtb -O dts`.
+
+The RealView source is stored in its preprocessed form. The file in the kernel
+tree begins with `#include`, and cpp has to run before either tool sees it;
+keeping the post-cpp text means the comparison does not depend on which header
+revisions the machine has.
 
 Fixtures live in `internal/fixtures` as DTS sources plus the DTB that
 `dtc 1.8.1` produced from them. The blob is checked in so the tests do not need
@@ -68,6 +84,9 @@ verifies it still matches, which is what CI runs.
 | `dts_token.mbt` | Token kinds, spans, scanner state |
 | `dts_lex.mbt` | Character rules and token scanning |
 | `dts_parse.mbt` | Source grammar, value parsing, source tree |
+| `phandle.mbt` | Label table, phandle numbering, reference rewrite |
+| `dtb_write.mbt` | Blob encoder |
+| `cmd/main/` | Command line front end |
 | `tools/gen-fixtures.sh` | Fixture regeneration |
 | `internal/fixtures/` | DTS sources and their compiled DTBs |
 
