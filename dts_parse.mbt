@@ -101,6 +101,9 @@ pub(all) struct SourceFile {
   /// Whether the file declared `/plugin/`, which changes how missing
   /// references are treated.
   is_plugin : Bool
+  /// Top-level patches from a plugin source, in order. A non-plugin file has
+  /// none, and a plugin normally has no root node either.
+  fragments : Array[Fragment]
 }
 
 ///|
@@ -112,6 +115,22 @@ pub(all) struct SourceProperty {
   value : Value
   /// Where the name appeared.
   span : Span
+}
+
+///|
+/// One top-level patch in a plugin source, written `&label { ... }`.
+///
+/// The compiler turns each of these into a `fragment@N` node holding a
+/// `target` reference and an `__overlay__` subtree, which is what the binary
+/// form stores. They are kept separate here rather than folded at parse time
+/// so that a file with no fragments still parses as a plain tree.
+pub(all) struct Fragment {
+  /// The label or path the patch applies to.
+  target : ValuePart
+  /// Where the fragment appeared.
+  span : Span
+  /// The properties and children the patch adds.
+  node : SourceNode
 }
 
 ///|
@@ -275,18 +294,34 @@ pub fn parse_source(source : String) -> SourceFile raise ParseError {
       span=parser.current.span,
     )
   }
-  if parser.at_eof() {
-    raise BadValue(detail="no root node", span=parser.current.span)
+  // A plugin may consist only of `&label { ... }` patches, so an empty file
+  // after the directives is legal there. A plain source still needs its root
+  // node.
+  let fragments : Array[Fragment] = []
+  let root : SourceNode = if parser.at_eof() {
+    if !is_plugin {
+      raise BadValue(detail="no root node", span=parser.current.span)
+    }
+    { name: "", labels: [], properties: [], children: [], }
+  } else if parser.starts_fragment() {
+    // Every top-level entry is a patch. The root node stays empty; the
+    // fragments carry everything the file said.
+    while !parser.at_eof() {
+      fragments.push(parser.parse_fragment())
+    }
+    { name: "", labels: [], properties: [], children: [], }
+  } else {
+    let node = parser.parse_node("")
+    if !parser.at_eof() {
+      raise Unexpected(
+        token=parser.current.kind,
+        expected="end of file after the root node",
+        span=parser.current.span,
+      )
+    }
+    node
   }
-  let root = parser.parse_node("")
-  if !parser.at_eof() {
-    raise Unexpected(
-      token=parser.current.kind,
-      expected="end of file after the root node",
-      span=parser.current.span,
-    )
-  }
-  { root, memreserves, is_plugin, }
+  { root, memreserves, is_plugin, fragments, }
 }
 
 ///|
@@ -807,6 +842,81 @@ fn Parser::parse_bits(self : Parser) -> ValuePart raise ParseError {
   raise Unexpected(
     token=self.current.kind,
     expected="'>' closing the cell list",
+    span=self.current.span,
+  )
+}
+
+///|
+/// Whether the next top-level construct is a `&label { ... }` patch.
+///
+/// The token after `&` is either an identifier or `{`, and a plain reference
+/// never appears at top level, so seeing `&` here is unambiguous.
+fn Parser::starts_fragment(self : Parser) -> Bool {
+  same_kind(self.current.kind, Amp)
+}
+
+///|
+/// Parses one `&target { ... }` patch.
+///
+/// The node body is parsed by the same code a normal node uses, so properties,
+/// children and nested labels all behave the same inside a patch.
+fn Parser::parse_fragment(self : Parser) -> Fragment raise ParseError {
+  let span = self.current.span
+  let target = self.parse_reference()
+  let node = self.parse_node_body("__overlay__")
+  { target, span, node, }
+}
+
+///|
+/// Parses a brace-delimited body under a caller-supplied name.
+///
+/// Extracted from `parse_node` so a fragment can reuse it: the difference
+/// between a node and a patch is only how the name was decided.
+fn Parser::parse_node_body(
+  self : Parser,
+  name : String,
+) -> SourceNode raise ParseError {
+  self.expect_kind(LBrace, "'{' opening the node body")
+  self.advance()
+  let properties : Array[SourceProperty] = []
+  let children : Array[SourceNode] = []
+  let node_labels : Array[String] = []
+  while !self.at_eof() {
+    if same_kind(self.current.kind, RBrace) {
+      self.advance()
+      self.expect_kind(Semicolon, "';' after '}'")
+      self.advance()
+      return { name, labels: node_labels.copy(), properties, children, }
+    }
+    let (ident, ident_span) = self.take_ident("a node or property name")
+    if same_kind(self.current.kind, Colon) {
+      self.advance()
+      node_labels.push(ident)
+      ignore(ident_span)
+      continue
+    }
+    let eq = same_kind(self.current.kind, Equals)
+    let semi = same_kind(self.current.kind, Semicolon)
+    let is_property = eq || semi
+    if is_property {
+      properties.push(self.parse_property(ident, ident_span))
+      continue
+    }
+    if same_kind(self.current.kind, LBrace) {
+      let child = self.parse_node(ident)
+      children.push({ ..child, labels: node_labels.copy(), })
+      node_labels.clear()
+      continue
+    }
+    raise Unexpected(
+      token=self.current.kind,
+      expected="'{', '=' or ';' after an identifier",
+      span=self.current.span,
+    )
+  }
+  raise Unexpected(
+    token=self.current.kind,
+    expected="'}' closing the node body",
     span=self.current.span,
   )
 }

@@ -6,6 +6,8 @@ import {
 }
 
 // Values
+pub fn build_overlay(SourceFile) -> SourceFile raise OverlayError
+
 pub fn encode_blob(SourceFile) -> Bytes raise DtbError
 
 pub fn parse_header(Bytes) -> Header raise DtbError
@@ -41,6 +43,18 @@ pub(all) suberror LexerError {
 pub fn LexerError::output(Self, &Logger) -> Unit
 pub fn LexerError::to_string(Self) -> String
 pub impl Show for LexerError
+
+pub(all) suberror OverlayError {
+  UnknownSymbol(label~ : String)
+  MissingTarget(path~ : String)
+  BadFixup(detail~ : String)
+  NoSymbols
+  BadFragment(name~ : String)
+  Resolve(inner~ : ResolveError)
+}
+pub fn OverlayError::output(Self, &Logger) -> Unit
+pub fn OverlayError::to_string(Self) -> String
+pub impl Show for OverlayError
 
 pub(all) suberror ParseError {
   Unexpected(token~ : TokenKind, expected~ : String, span~ : Span)
@@ -91,6 +105,12 @@ pub fn Cursor::little(Int64) -> Self
 pub(all) enum Endian {
   Little
   Big
+}
+
+pub(all) struct Fragment {
+  target : ValuePart
+  span : Span
+  node : SourceNode
 }
 
 pub(all) struct Header {
@@ -147,6 +167,7 @@ pub(all) struct SourceFile {
   root : SourceNode
   memreserves : Array[(UInt64, UInt64)]
   is_plugin : Bool
+  fragments : Array[Fragment]
 }
 
 pub(all) struct SourceNode {

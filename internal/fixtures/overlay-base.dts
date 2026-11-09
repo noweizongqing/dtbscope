@@ -1,0 +1,27 @@
+/dts-v1/;
+
+/ {
+	compatible = "dtbscope,overlay-base";
+	#address-cells = <1>;
+	#size-cells = <1>;
+
+	soc {
+		compatible = "simple-bus";
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		intc: interrupt-controller@1000 {
+			compatible = "test,intc";
+			reg = <0x1000 0x100>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+
+		uart0: serial@2000 {
+			compatible = "test,uart";
+			reg = <0x2000 0x100>;
+			status = "disabled";
+		};
+	};
+};

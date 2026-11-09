@@ -1,0 +1,9 @@
+/dts-v1/;
+/plugin/;
+
+&uart0 {
+	status = "okay";
+	clock-frequency = <115200>;
+	interrupt-parent = <&intc>;
+	interrupts = <5 1>;
+};
