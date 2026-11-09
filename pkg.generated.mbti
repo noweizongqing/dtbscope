@@ -4,6 +4,8 @@ package "noweizongqing/dtbscope"
 // Values
 pub fn parse_header(Bytes) -> Header raise DtbError
 
+pub fn parse_struct(Bounds, Bounds) -> Tree raise DtbError
+
 // Errors
 pub(all) suberror DtbError {
   UnexpectedEnd(offset~ : Int64, needed~ : Int64, available~ : Int64)
@@ -61,6 +63,39 @@ pub(all) struct Header {
 }
 pub fn Header::is_modern(Self) -> Bool
 pub fn Header::size(Self) -> Int64
+
+pub(all) struct Node {
+  name : String
+  properties : Array[Property]
+  children : Array[Node]
+}
+
+pub(all) struct Property {
+  name : String
+  value : Bytes
+  offset : Int64
+}
+
+pub(all) enum Token {
+  BeginNode
+  EndNode
+  Prop
+  Nop
+  End
+}
+
+pub(all) struct Tree {
+  root : Node
+  warnings : Array[Warning]
+}
+
+pub(all) enum Warning {
+  MissingEnd(offset~ : Int64)
+  TrailingData(offset~ : Int64, remaining~ : Int64)
+}
+pub fn Warning::output(Self, &Logger) -> Unit
+pub fn Warning::to_string(Self) -> String
+pub impl Show for Warning
 
 // Type aliases
 

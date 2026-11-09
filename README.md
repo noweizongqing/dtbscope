@@ -29,8 +29,9 @@ are next.
 | 40-byte blob header, version 17 | done |
 | Block tiling and alignment validation | done |
 | Bounds-checked primitive reads | done |
-| Struct block walk (nodes, properties) | in progress |
-| Strings block lookup | in progress |
+| Struct block walk (nodes, properties) | done |
+| Strings block lookup | done |
+| Nesting limit and cycle guard | done |
 | DTS parser | not started |
 | DTS emitter | not started |
 | Overlay application | not started |
@@ -40,6 +41,11 @@ are next.
 ```sh
 moon test
 ```
+
+Two fixtures: `minimal.dtb` is a flat board tree, `nested.dtb` has a CPU
+subtree, an interrupt controller with a phandle and a `ranges` property that
+encodes to nothing. Both are checked node by node against
+`dtc -I dtb -O dts` on the same bytes.
 
 Fixtures live in `internal/fixtures` as DTS sources plus the DTB that
 `dtc 1.8.1` produced from them. The blob is checked in so the tests do not need
@@ -53,6 +59,7 @@ verifies it still matches, which is what CI runs.
 | `dtbscope.mbt` | Error type, cursor, hex formatting |
 | `reader.mbt` | Bounds-checked reads of the primitive types |
 | `header.mbt` | Blob header parse and validation |
+| `struct_block.mbt` | Token walk, node tree, structural warnings |
 | `tools/gen-fixtures.sh` | Fixture regeneration |
 | `internal/fixtures/` | DTS sources and their compiled DTBs |
 
