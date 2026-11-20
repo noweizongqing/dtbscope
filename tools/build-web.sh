@@ -24,11 +24,5 @@ for f in "$root/_build/js/release/build/wasm/"*.js \
   cp "$f" "$dist/"
 done
 
-# The page imports `wasm.js`; the backend names the file after the package, so
-# the entry point is renamed to keep the import stable across package renames.
-if [ -f "$dist/wasm.js" ]; then
-  mv "$dist/wasm.js" "$dist/wasm.js"
-fi
-
 echo "demo written to web/dist"
 ls -1 "$dist"
