@@ -165,3 +165,47 @@ test "realview pb1176: shape" {
   inspect(header.size_dt_struct, content="9096")
   inspect(header.size_dt_strings, content="831")
 }
+
+///|
+/// Encoding a decoded tree reproduces the blob it came from, byte for byte.
+///
+/// This is the path `dtbscope -b base.dtb -o merged.dtb` takes after its merge:
+/// `apply_overlay` patches a decoded `Tree`, and `encode_tree` writes it back.
+/// Nothing else in the suite covers that function, which matters because the
+/// merge path has no dtc comparison to fall back on — dtc has no apply mode —
+/// so a bug here would show up as a loader refusing a blob rather than as a
+/// failed test. Padding is the part that breaks first: a property whose value
+/// is not a multiple of four has to be followed by zeroes, and dropping them
+/// leaves every later property misaligned while the header still says the
+/// block is the right length.
+///
+/// The strings block comes out in first-use order rather than the original
+/// order, so this passes only on trees dtc wrote, which is the same invariant
+/// `dts_emit` relies on for its own comparison.
+test "encode_tree: round-trips every fixture" {
+  let names = [
+    "minimal.dtb", "nested.dtb", "overlay-base.dtb", "overlay-uart.dtbo", "realview-pb1176.dtb",
+  ]
+  for name in names {
+    let blob = fixture_blob(name)
+    let again = encode_tree(decode_blob(blob))
+    inspect(first_difference(again, blob), content="identical")
+  }
+}
+
+///|
+/// Decodes a blob into a tree, for the round-trip test above.
+fn decode_blob(blob : Bytes) -> Tree raise {
+  let header = parse_header(blob)
+  let struct_bounds = Bounds::of_range(
+    blob,
+    header.off_dt_struct,
+    header.off_dt_struct + header.size_dt_struct,
+  )
+  let strings_bounds = Bounds::of_range(
+    blob,
+    header.off_dt_strings,
+    header.off_dt_strings + header.size_dt_strings,
+  )
+  parse_struct(struct_bounds, strings_bounds)
+}

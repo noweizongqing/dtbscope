@@ -75,11 +75,46 @@ jobs:
         run: |
           ./tools/build-web.sh
           node --input-type=module -e "
-            import { decompile_blob } from './web/dist/wasm.js';
+            import { decompile_blob, compile_source } from './web/dist/wasm.js';
             import { readFileSync } from 'node:fs';
+            const enc = new TextEncoder();
+            const dec = new TextDecoder();
+
             const blob = new Uint8Array(readFileSync('internal/fixtures/realview-pb1176.dtb'));
-            const got = new TextDecoder().decode(decompile_blob(blob));
+            const got = dec.decode(decompile_blob(blob));
             const want = readFileSync('internal/fixtures/realview-pb1176.expected.dts', 'utf8');
             if (got !== want) { console.error('browser module output differs'); process.exit(1); }
-            console.log('browser module: byte-identical');
+            console.log('browser module: decompile byte-identical');
+
+            // The compile direction is the one a browser cannot get from dtc,
+            // so it gets the same comparison the native CLI gets. The source is
+            // the preprocessed fixture, which is what the CLI compiles too.
+            const src = readFileSync('internal/fixtures/realview-pb1176.pre.dts', 'utf8');
+            const mine = compile_source(enc.encode(src));
+            if (mine[0] === 0x21) {
+              console.error('compile_source returned: ' + dec.decode(mine));
+              process.exit(1);
+            }
+            const ref = new Uint8Array(readFileSync('internal/fixtures/realview-pb1176.dtb'));
+            if (mine.length !== ref.length) {
+              console.error('compile_source length ' + mine.length + ', dtc ' + ref.length);
+              process.exit(1);
+            }
+            for (let i = 0; i < ref.length; i++) {
+              if (mine[i] !== ref[i]) {
+                console.error('compile_source differs at byte ' + i);
+                process.exit(1);
+              }
+            }
+            console.log('browser module: compile byte-identical');
+
+            // A malformed source has to come back as a message, not an
+            // exception across the module boundary: the page reads the first
+            // byte to decide which it got.
+            const bad = compile_source(enc.encode('/dts-v1/; / { broken'));
+            if (bad[0] !== 0x21) {
+              console.error('bad source did not return an error message');
+              process.exit(1);
+            }
+            console.log('browser module: errors are reported as text');
           "

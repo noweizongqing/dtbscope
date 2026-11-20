@@ -124,7 +124,7 @@ fn main {
   }
   match mode {
     Help => println(usage())
-    Version => println("dtbscope 0.1.0")
+    Version => println("dtbscope 0.2.0")
     Dump(path) => {
       let blob = @fs.read_file_to_bytes(path) catch {
         _ => {
@@ -133,9 +133,12 @@ fn main {
         }
       }
       let text = dump_blob(blob) catch {
-        _ => {
-          report(path + ": read failed")
-          abort("read failed")
+        e => {
+          // The bytes were read; what failed was parsing them. Reporting this
+          // as a read failure sends the caller looking at the filesystem when
+          // the file is there and the header is wrong.
+          report(path + ": " + error_text(e))
+          abort("dump failed")
         }
       }
       println(text)
