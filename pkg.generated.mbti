@@ -6,15 +6,23 @@ import {
 }
 
 // Values
+pub fn apply_overlay(Tree, Overlay) -> Tree raise OverlayError
+
 pub fn build_overlay(SourceFile) -> SourceFile raise OverlayError
 
 pub fn encode_blob(SourceFile) -> Bytes raise DtbError
 
+pub fn encode_tree(Tree) -> Bytes
+
 pub fn parse_header(Bytes) -> Header raise DtbError
+
+pub fn parse_overlay(Tree) -> Overlay raise OverlayError
 
 pub fn parse_source(String) -> SourceFile raise ParseError
 
 pub fn parse_struct(Bounds, Bounds) -> Tree raise DtbError
+
+pub fn parse_tree(Bytes) -> Tree raise DtbError
 
 pub fn resolve_references(SourceFile) -> SourceFile raise ResolveError
 
@@ -107,6 +115,12 @@ pub(all) enum Endian {
   Big
 }
 
+pub(all) struct FixupLocation {
+  path : String
+  property : String
+  offset : Int32
+}
+
 pub(all) struct Fragment {
   target : ValuePart
   span : Span
@@ -149,6 +163,12 @@ pub(all) struct Node {
   name : String
   properties : Array[Property]
   children : Array[Node]
+}
+
+pub(all) struct Overlay {
+  blob : Tree
+  fragments : Array[Node]
+  fixups : Array[(String, Array[FixupLocation])]
 }
 
 pub(all) struct Parser {

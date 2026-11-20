@@ -41,7 +41,9 @@ are next.
 | CLI: compile and dump modes | done |
 | Reference resolution, phandle assignment | done |
 | DTS emitter | not started |
-| Overlay application | not started |
+| Overlay generation from `/plugin/` sources | done |
+| Overlay application onto a base tree | done |
+| Browser demo (JS backend) | done |
 
 ## Quick start
 
@@ -87,8 +89,47 @@ verifies it still matches, which is what CI runs.
 | `phandle.mbt` | Label table, phandle numbering, reference rewrite |
 | `dtb_write.mbt` | Blob encoder |
 | `cmd/main/` | Command line front end |
+| `overlay.mbt` | Overlay generation, fixups, application |
+| `wasm/` | JavaScript entry points for the browser demo |
+| `web/` | Demo page, built into `web/dist` by `tools/build-web.sh` |
 | `tools/gen-fixtures.sh` | Fixture regeneration |
 | `internal/fixtures/` | DTS sources and their compiled DTBs |
+
+## Overlays
+
+An overlay patches a base tree it cannot see. A reference in one is written as
+the reserved word `0xffffffff` and recorded in `__fixups__` as the node,
+property and byte offset to patch; the loader reads the base tree's
+`__symbols__` to turn the label into a path, then writes the base tree's
+phandle into that word.
+
+```sh
+# Compile a plugin source to a .dtbo
+moon run cmd/main -- board-overlay.dts --plugin -o board.dtbo
+
+# Apply it to a base blob and write the merged result
+moon run cmd/main -- board.dtbo -b board.dtb -o merged.dtb
+```
+
+The base tree has to be built with symbols (`dtc -@`), because that is where
+the labels are. Application merges rather than replaces: a fragment that sets
+one property on a node keeps the base tree's other properties on it.
+
+## Browser demo
+
+```sh
+./tools/build-web.sh
+python3 -m http.server -d web/dist 8000
+```
+
+`web/dist` is a static directory. The page imports the MoonBit JavaScript
+module directly, and `Bytes` maps to `Uint8Array` on both sides, so a dropped
+file goes into the parser with no marshalling.
+
+The JavaScript backend is used rather than wasm-gc because wasm-gc values are
+GC-managed references: calling into that module from a page needs a glue layer
+this project does not ship, while the JS backend emits a module a page imports
+directly.
 
 ## Scope
 

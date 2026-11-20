@@ -1,0 +1,13 @@
+import {
+  "noweizongqing/dtbscope" @lib,
+  "moonbitlang/core/encoding/utf8",
+}
+
+// The browser demo loads the JavaScript backend rather than wasm-gc: wasm-gc
+// values are GC-managed references, so calling into it from a page needs a
+// glue layer this project does not ship, while the JS backend produces a
+// module a page can import directly.
+
+options(
+  link: { "js": { "exports": [ "dump_blob", "compile_source" ] } },
+)

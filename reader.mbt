@@ -167,7 +167,7 @@ pub fn Bounds::slice(
   what : String,
 ) -> Bytes raise DtbError {
   self.require(offset, n, what)
-  let out = Buffer::Buffer(size_hint=n.to_int())
+  let out = Buffer(capacity=n.to_int())
   for i in 0..<n.to_int() {
     out.write_byte(self.bytes.at(offset.to_int() + i))
   }
@@ -206,7 +206,7 @@ pub fn Bounds::cstr(
       available=(stop - start).to_int64(),
     )
   }
-  let out = Buffer::Buffer(size_hint=end - start)
+  let out = Buffer(capacity=end - start)
   for i in start..<end {
     out.write_byte(self.bytes.at(i))
   }

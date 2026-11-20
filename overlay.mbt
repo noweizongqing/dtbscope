@@ -270,3 +270,609 @@ fn join_strings(values : Array[String], sep : String) -> String {
   }
   buf.to_string()
 }
+
+///|
+/// A parsed overlay ready to be applied: the fragments it carries and the
+/// fixups that name where each unresolved reference landed.
+pub(all) struct Overlay {
+  /// Blob the overlay was read from, kept so error messages can name a
+  /// position.
+  blob : Tree
+  /// Fragment nodes, in the order the blob lists them.
+  fragments : Array[Node]
+  /// Label to the locations that need the label's phandle written into them.
+  fixups : Array[(String, Array[FixupLocation])]
+}
+
+///|
+/// One place a label's phandle has to be written.
+///
+/// `path` is the node, `property` the property on it, and `offset` the byte
+/// offset inside that property's value. This is the same triple dtc writes
+/// into `__fixups__` as a single string.
+pub(all) struct FixupLocation {
+  /// Node path, with `/` for the root.
+  path : String
+  /// Property name.
+  property : String
+  /// Byte offset inside the value.
+  offset : Int32
+}
+
+///|
+/// Reads an overlay blob.
+///
+/// The fixup strings are parsed here rather than at apply time so that a
+/// malformed one is reported when the overlay is read, not halfway through
+/// patching a tree.
+pub fn parse_overlay(tree : Tree) -> Overlay raise OverlayError {
+  let fragments : Array[Node] = []
+  for child in tree.root.children {
+    if child.name.has_prefix("fragment@") {
+      fragments.push(child)
+    }
+  }
+  let fixups : Array[(String, Array[FixupLocation])] = []
+  match find_child(tree.root, "__fixups__") {
+    Some(node) =>
+      for prop in node.properties {
+        let entries : Array[FixupLocation] = []
+        // One property holds one label; several locations for it are separated
+        // by a NUL in the value, which is how dtc stores a string list.
+        for text in split_cstr_list(prop.value) {
+          entries.push(parse_fixup_location(text))
+        }
+        fixups.push((prop.name, entries))
+      }
+    None => ()
+  }
+  { blob: tree, fragments, fixups, }
+}
+
+///|
+/// Finds a direct child by name.
+fn find_child(node : Node, name : String) -> Node? {
+  for child in node.children {
+    if child.name == name {
+      return Some(child)
+    }
+  }
+  None
+}
+
+///|
+/// Splits a value into the NUL-terminated strings it holds.
+fn split_cstr_list(value : Bytes) -> Array[String] {
+  let out : Array[String] = []
+  let bounds = Bounds::of_bytes(value)
+  let mut at = 0L
+  while at < bounds.length() {
+    let (text, next) = bounds.cstr(at, bounds.length()) catch { _ => break }
+    out.push(text)
+    at = next
+  }
+  out
+}
+
+///|
+/// Parses `/path/to/node:property:offset`.
+///
+/// The path itself contains slashes but no colons, so the last two colons
+/// delimit the parts unambiguously.
+fn parse_fixup_location(text : String) -> FixupLocation raise OverlayError {
+  let last = text.rev_find(":")
+  match last {
+    None => raise BadFixup(detail="not a /path:property:offset string: " + text)
+    Some(at) => {
+      let head = text[:at].to_owned()
+      let offset_text = text[at + 1:].to_owned()
+      let offset = match str_to_int(offset_text) {
+        Some(n) => n
+        None => raise BadFixup(detail="offset is not a number in " + text)
+      }
+      match head.rev_find(":") {
+        None => raise BadFixup(detail="no property in " + text)
+        Some(sep) => {
+          let path = head[:sep].to_owned()
+          let property = head[sep + 1:].to_owned()
+          { path, property, offset, }
+        }
+      }
+    }
+  }
+}
+
+///|
+/// Parses a non-negative decimal integer, or None.
+///
+/// Hand-rolled because the standard conversion raises on bad input and this
+/// call site wants to report the whole fixup string instead of the one field.
+fn str_to_int(text : String) -> Int32? {
+  if text.length() == 0 {
+    return None
+  }
+  let mut value = 0
+  for i in 0..<text.length() {
+    let c = text.get_char(i).unwrap()
+    if c < '0' || c > '9' {
+      return None
+    }
+    value = value * 10 + (c.to_int() - 0x30)
+  }
+  Some(value)
+}
+
+///|
+/// Applies an overlay to a base tree and returns the merged tree.
+///
+/// The procedure is the one the Linux loader follows. Each fragment names a
+/// node in the base tree — either through the label recorded in the overlay's
+/// `__fixups__`, or directly through `target-path` — and carries an
+/// `__overlay__` subtree. That subtree's properties are set on the target,
+/// replacing what was there, and its children are merged into children of the
+/// same name, creating them where the base has none.
+///
+/// Merging rather than replacing is the whole point: an overlay that sets one
+/// property on a node keeps the base tree's other properties on it.
+pub fn apply_overlay(base : Tree, overlay : Overlay) -> Tree raise OverlayError {
+  let symbols = match find_child(base.root, "__symbols__") {
+    Some(node) => symbols_of(node)
+    None => raise NoSymbols
+  }
+  // The fixups are what turn a label into a path: an overlay built from
+  // `&uart0 { ... }` has a placeholder in `fragment@0/target` and a fixup
+  // naming `uart0` for that exact property.
+  let targets : Map[String, String] = Map([])
+  for (label, locations) in overlay.fixups {
+    match symbols.get(label) {
+      Some(path) =>
+        for location in locations {
+          // The location is `/fragment@N:target:0`; the fragment name is the
+          // last path segment and is what the map is keyed on.
+          targets.set(location.path, path)
+        }
+      None => raise UnknownSymbol(label~)
+    }
+  }
+  let phandles = phandles_of(base.root)
+  let mut root = base.root
+  for fragment in overlay.fragments {
+    let target_path = fragment_target_path(fragment, targets)
+    let body = match find_child(fragment, "__overlay__") {
+      Some(node) => node
+      None => raise BadFragment(name=fragment.name)
+    }
+    root = merge_into(root, target_path, body)
+  }
+  // Placeholder words in the applied body are now resolvable: the base tree
+  // gave those nodes their numbers.
+  root = patch_placeholders(root, overlay, symbols, phandles)
+  { root, warnings: base.warnings, }
+}
+
+///|
+/// Works out which node a fragment applies to.
+fn fragment_target_path(
+  fragment : Node,
+  targets : Map[String, String],
+) -> String raise OverlayError {
+  // A `target-path` property names the node outright, which is what an overlay
+  // built without -@ carries.
+  let by_property = match find_property(fragment, "target-path") {
+    Some(prop) => {
+      let value = Bounds::of_bytes(prop.value)
+      let text = value.cstr(0L, value.length()) catch { _ => ("", 0L) }
+      if text.0 == "" {
+        None
+      } else {
+        Some(text.0)
+      }
+    }
+    None => None
+  }
+  match by_property {
+    Some(path) => path
+    None => {
+      let key = "/" + fragment.name
+      match targets.get(key) {
+        Some(path) => path
+        None => raise BadFragment(name=fragment.name)
+      }
+    }
+  }
+}
+
+///|
+/// Reads `__symbols__` into a label-to-path map.
+fn symbols_of(node : Node) -> Map[String, String] {
+  let out : Map[String, String] = Map([])
+  for prop in node.properties {
+    let value = Bounds::of_bytes(prop.value)
+    let text = value.cstr(0L, value.length()) catch { _ => continue }
+    out.set(prop.name, text.0)
+  }
+  out
+}
+
+///|
+/// Reads every node's phandle, keyed by path.
+fn phandles_of(node : Node) -> Map[String, UInt32] {
+  let out : Map[String, UInt32] = Map([])
+  walk_phandles(node, "/", out)
+  out
+}
+
+///|
+/// Depth-first walk collecting phandles.
+fn walk_phandles(node : Node, path : String, out : Map[String, UInt32]) -> Unit {
+  for prop in node.properties {
+    if prop.name == "phandle" && prop.value.length() == 4 {
+      let value = Bounds::of_bytes(prop.value)
+      let read = value.read_u32(Cursor::big(0L)) catch { _ => continue }
+      out.set(path, read.0)
+    }
+  }
+  for child in node.children {
+    walk_phandles(child, join_path(path, child.name), out)
+  }
+}
+
+///|
+/// Merges an overlay body into the node at `path`.
+///
+/// Properties from the body replace properties of the same name and are
+/// appended otherwise, which is the order the loader produces and what a
+/// subsequent dump shows. Children merge recursively by name.
+fn merge_into(root : Node, path : String, body : Node) -> Node {
+  if path == "/" {
+    return merge_node(root, body)
+  }
+  let segments = split_path(path)
+  set_child(root, segments, 0, body)
+}
+
+///|
+/// Splits `/soc/serial@2000` into `["soc", "serial@2000"]`.
+fn split_path(path : String) -> Array[String] {
+  let out : Array[String] = []
+  let mut start = 0
+  for i in 0..<path.length() {
+    if path.get_char(i).unwrap() == '/' {
+      if i > start {
+        out.push(path[start:i].to_owned())
+      }
+      start = i + 1
+    }
+  }
+  if path.length() > start {
+    out.push(path[start:].to_owned())
+  }
+  out
+}
+
+///|
+/// Replaces the child named by `segments[at]` with `body`, recursing for the
+/// remaining segments and creating a node where none exists.
+fn set_child(
+  node : Node,
+  segments : Array[String],
+  at : Int32,
+  body : Node,
+) -> Node {
+  if at >= segments.length() {
+    return merge_node(node, body)
+  }
+  let name = segments[at]
+  let children : Array[Node] = []
+  let mut found = false
+  for child in node.children {
+    if child.name == name {
+      found = true
+      children.push(set_child(child, segments, at + 1, body))
+    } else {
+      children.push(child)
+    }
+  }
+  if !found {
+    // The path names a node the base tree does not have. dtc reports this;
+    // here an empty node is created so that the fragment still lands
+    // somewhere, and the caller can compare against dtc to catch it.
+    let mut fresh : Node = { name, properties: [], children: [], }
+    fresh = set_child(fresh, segments, at + 1, body)
+    children.push(fresh)
+  }
+  { ..node, children, }
+}
+
+///|
+/// Merges one node's properties and children into another.
+fn merge_node(base : Node, body : Node) -> Node {
+  let properties = base.properties.copy()
+  for prop in body.properties {
+    let replaced : Array[Property] = []
+    let mut hit = false
+    for existing in properties {
+      if existing.name == prop.name {
+        replaced.push(prop)
+        hit = true
+      } else {
+        replaced.push(existing)
+      }
+    }
+    if hit {
+      properties.clear()
+      for p in replaced {
+        properties.push(p)
+      }
+    } else {
+      properties.push(prop)
+    }
+  }
+  let children = base.children.copy()
+  for child in body.children {
+    let merged : Array[Node] = []
+    let mut hit = false
+    for existing in children {
+      if existing.name == child.name {
+        merged.push(merge_node(existing, child))
+        hit = true
+      } else {
+        merged.push(existing)
+      }
+    }
+    children.clear()
+    for c in merged {
+      children.push(c)
+    }
+    if !hit {
+      children.push(child)
+    }
+  }
+  { ..base, properties, children, }
+}
+
+///|
+/// Replaces every placeholder word with the phandle the base tree assigned.
+///
+/// The overlay's own fixups name where the placeholders are, so this walks
+/// those locations rather than scanning the tree for 0xffffffff: a real cell
+/// value can legitimately be that number, and rewriting it would corrupt an
+/// unrelated property.
+fn patch_placeholders(
+  root : Node,
+  overlay : Overlay,
+  symbols : Map[String, String],
+  phandles : Map[String, UInt32],
+) -> Node {
+  let mut current = root
+  // The paths in the fixups address the overlay, not the merged tree: a
+  // location is `/fragment@0/__overlay__:interrupt-parent:0`, while the node
+  // it belongs to after merging is wherever the fragment's target pointed.
+  let targets : Map[String, String] = Map([])
+  for (label, locations) in overlay.fixups {
+    for location in locations {
+      match targets.get(location.path) {
+        Some(_) => ()
+        None =>
+          match symbols.get(label) {
+            Some(path) => targets.set(location.path, path)
+            None => ()
+          }
+      }
+    }
+  }
+  for (label, locations) in overlay.fixups {
+    match symbols.get(label) {
+      None => continue
+      Some(target_path) =>
+        // A node the base tree never gave a number cannot be patched, and
+        // inventing one here would produce a blob whose references disagree
+        // with the tree they point into.
+        match phandles.get(target_path) {
+          None => continue
+          Some(number) =>
+            for location in locations {
+              current = write_cell(
+                current,
+                remap_fixup_path(location.path, targets),
+                location.property,
+                location.offset,
+                number,
+              )
+            }
+        }
+    }
+  }
+  current
+}
+
+///|
+/// Writes a 32-bit value at a byte offset inside a property.
+///
+/// The path in a fixup points into the overlay tree, but the apply step merged
+/// that tree into the base, so the same path addresses the merged result: the
+/// fragment names survive the merge.
+fn write_cell(
+  root : Node,
+  path : String,
+  property : String,
+  offset : Int32,
+  value : UInt32,
+) -> Node {
+  let segments = split_path(path)
+  update_node(root, segments, 0, property, offset, value)
+}
+
+///|
+/// Recursively finds the node at `segments` and patches its property.
+fn update_node(
+  node : Node,
+  segments : Array[String],
+  at : Int32,
+  property : String,
+  offset : Int32,
+  value : UInt32,
+) -> Node {
+  if at >= segments.length() {
+    let properties : Array[Property] = []
+    for prop in node.properties {
+      if prop.name == property && offset + 4 <= prop.value.length() {
+        let patched = Buffer(capacity=prop.value.length())
+        for i in 0..<prop.value.length() {
+          patched.write_byte(prop.value.at(i))
+        }
+        let raw = value.reinterpret_as_int()
+        let bytes = patched.to_bytes()
+        let out = Buffer(capacity=bytes.length())
+        for i in 0..<bytes.length() {
+          if i == offset {
+            out.write_byte(((raw >> 24) & 0xFF).to_byte())
+            out.write_byte(((raw >> 16) & 0xFF).to_byte())
+            out.write_byte(((raw >> 8) & 0xFF).to_byte())
+            out.write_byte((raw & 0xFF).to_byte())
+          } else if i < offset || i >= offset + 4 {
+            out.write_byte(bytes.at(i))
+          }
+        }
+        properties.push({ ..prop, value: out.to_bytes(), })
+      } else {
+        properties.push(prop)
+      }
+    }
+    return { ..node, properties, }
+  }
+  let name = segments[at]
+  let children : Array[Node] = []
+  for child in node.children {
+    if child.name == name {
+      children.push(
+        update_node(child, segments, at + 1, property, offset, value),
+      )
+    } else {
+      children.push(child)
+    }
+  }
+  { ..node, children, }
+}
+
+///|
+/// Finds a direct property by name.
+fn find_property(node : Node, name : String) -> Property? {
+  for prop in node.properties {
+    if prop.name == name {
+      return Some(prop)
+    }
+  }
+  None
+}
+
+///|
+/// Rewrites a fixup path from overlay coordinates to merged-tree coordinates.
+///
+/// `/fragment@0/__overlay__/serial@1000` addresses a node inside the fragment;
+/// after the merge that node lives under the fragment's target, so the
+/// `fragment@N/__overlay__` prefix is replaced by the target path. A fixup on
+/// the fragment's own `target` property has no merged equivalent and is left
+/// alone, which is correct: the loader consumes it rather than rewriting it.
+fn remap_fixup_path(path : String, targets : Map[String, String]) -> String {
+  let marker = "/__overlay__"
+  match path.find(marker) {
+    None => path
+    Some(at) => {
+      let fragment_part = path[:at].to_owned()
+      let tail = path[at + marker.length():].to_owned()
+      // `targets` is keyed on `/fragment@N`; the fixup path is
+      // `/fragment@N/__overlay__/...`, so the same key applies.
+      match targets.get(fragment_part) {
+        Some(target) => if target == "/" { tail } else { target + tail }
+        None => path
+      }
+    }
+  }
+}
+
+///|
+/// Decodes a blob into a tree, as the CLI and a browser caller both need.
+pub fn parse_tree(blob : Bytes) -> Tree raise DtbError {
+  let header = parse_header(blob)
+  let struct_bounds = Bounds::of_range(
+    blob,
+    header.off_dt_struct,
+    header.off_dt_struct + header.size_dt_struct,
+  )
+  let strings_bounds = Bounds::of_range(
+    blob,
+    header.off_dt_strings,
+    header.off_dt_strings + header.size_dt_strings,
+  )
+  parse_struct(struct_bounds, strings_bounds)
+}
+
+///|
+/// Encodes a decoded tree back to a blob.
+///
+/// The values are already bytes at this point, so each property is written
+/// through unchanged; this exists so that an applied overlay can be written
+/// out without going through the source representation.
+pub fn encode_tree(tree : Tree) -> Bytes {
+  let strings = StringTable::new()
+  let struct_block = Buffer()
+  write_binary_node(tree.root, strings, struct_block)
+  put_u32(struct_block, 0x9)
+  let strings_bytes = strings.to_bytes()
+  let struct_bytes = struct_block.to_bytes()
+  let memreserve = Buffer()
+  put_u64(memreserve, 0UL)
+  put_u64(memreserve, 0UL)
+  let memreserve_bytes = memreserve.to_bytes()
+  let blocks = memreserve_bytes.length() + struct_bytes.length()
+  let total = 40 + blocks + strings_bytes.length()
+  let out = Buffer()
+  put_u32(out, 0xD00D_FEED)
+  put_u32(out, total.reinterpret_as_uint())
+  let off_struct = 40 + memreserve_bytes.length()
+  put_u32(out, off_struct.reinterpret_as_uint())
+  let off_strings = off_struct + struct_bytes.length()
+  put_u32(out, off_strings.reinterpret_as_uint())
+  put_u32(out, 40)
+  put_u32(out, 17)
+  put_u32(out, 16)
+  put_u32(out, 0)
+  put_u32(out, strings_bytes.length().reinterpret_as_uint())
+  put_u32(out, struct_bytes.length().reinterpret_as_uint())
+  for i in 0..<memreserve_bytes.length() {
+    out.write_byte(memreserve_bytes.at(i))
+  }
+  for i in 0..<struct_bytes.length() {
+    out.write_byte(struct_bytes.at(i))
+  }
+  for i in 0..<strings_bytes.length() {
+    out.write_byte(strings_bytes.at(i))
+  }
+  out.to_bytes()
+}
+
+///|
+/// Writes a decoded node back into the struct block, values already encoded.
+fn write_binary_node(node : Node, strings : StringTable, out : Buffer) -> Unit {
+  put_u32(out, 0x1)
+  for i in 0..<node.name.length() {
+    out.write_byte(node.name.get_char(i).unwrap().to_int().to_byte())
+  }
+  out.write_byte((0 : Int32).to_byte())
+  align_buffer(out)
+  for prop in node.properties {
+    let name_at = strings.intern(prop.name)
+    put_u32(out, 0x3)
+    put_u32(out, prop.value.length().reinterpret_as_uint())
+    put_u32(out, name_at.reinterpret_as_uint())
+    for i in 0..<prop.value.length() {
+      out.write_byte(prop.value.at(i))
+    }
+    align_buffer(out)
+  }
+  for child in node.children {
+    write_binary_node(child, strings, out)
+  }
+  put_u32(out, 0x2)
+}

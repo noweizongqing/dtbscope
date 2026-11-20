@@ -32,7 +32,7 @@ test "header of a dtc-produced blob" {
 /// field is trusted.
 test "magic is checked first" {
   let bytes = fixture_minimal()
-  let damaged = Buffer::Buffer(size_hint=bytes.length())
+  let damaged = Buffer(capacity=bytes.length())
   for i in 0..<bytes.length() {
     damaged.write_byte(if i == 0 { 0xAA } else { bytes.at(i) })
   }

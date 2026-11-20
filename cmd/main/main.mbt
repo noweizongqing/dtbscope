@@ -12,6 +12,10 @@ enum Mode {
   Dump(String)
   /// Compile a source file to a blob.
   Compile(input~ : String, output~ : String)
+  /// Compile with `/plugin/` handling, producing a .dtbo.
+  CompileOverlay(input~ : String, output~ : String)
+  /// Apply an overlay to a base tree and write the merged blob.
+  Apply(base~ : String, overlay~ : String, output~ : String)
   /// Print usage.
   Help
   /// Print the version.
@@ -27,6 +31,8 @@ fn parse_args(args : Array[String]) -> Mode raise {
   let mut input : String? = None
   let mut output : String? = None
   let mut dump = false
+  let mut plugin = false
+  let mut base : String? = None
   let mut i = 0
   while i < args.length() {
     let arg = args[i]
@@ -42,6 +48,14 @@ fn parse_args(args : Array[String]) -> Mode raise {
       output = Some(args[i])
     } else if arg == "-d" || arg == "--dump" {
       dump = true
+    } else if arg == "--plugin" {
+      plugin = true
+    } else if arg == "-b" || arg == "--base" {
+      i = i + 1
+      if i >= args.length() {
+        raise Failure("-b needs a path")
+      }
+      base = Some(args[i])
     } else if arg.has_prefix("-") && arg != "-" {
       raise Failure("unknown option \{arg}")
     } else if input is None {
@@ -57,9 +71,16 @@ fn parse_args(args : Array[String]) -> Mode raise {
       if dump {
         Dump(path)
       } else {
-        match output {
-          Some(out) => Compile(input=path, output=out)
-          None =>
+        match (output, base) {
+          (Some(out), Some(base_path)) =>
+            Apply(base=base_path, overlay=path, output=out)
+          (Some(out), None) =>
+            if plugin {
+              CompileOverlay(input=path, output=out)
+            } else {
+              Compile(input=path, output=out)
+            }
+          (None, _) =>
             raise Failure("compiling needs -o <path>; use -d to dump instead")
         }
       }
@@ -99,6 +120,60 @@ fn main {
         }
       }
       println(text)
+    }
+    CompileOverlay(input~, output~) => {
+      let text = @fs.read_file_to_string(input) catch {
+        _ => {
+          report(input + ": read failed")
+          abort("read failed")
+        }
+      }
+      let blob = try {
+        let file = @lib.parse_source(text)
+        @lib.encode_blob(@lib.build_overlay(file))
+      } catch {
+        e => {
+          report(input + ": " + error_text(e))
+          abort("compile failed")
+        }
+      }
+      @fs.write_bytes_to_file(output, blob) catch {
+        _ => {
+          report(output + ": write failed")
+          abort("write failed")
+        }
+      }
+    }
+    Apply(base~, overlay~, output~) => {
+      let base_blob = @fs.read_file_to_bytes(base) catch {
+        _ => {
+          report(base + ": read failed")
+          abort("read failed")
+        }
+      }
+      let over_blob = @fs.read_file_to_bytes(overlay) catch {
+        _ => {
+          report(overlay + ": read failed")
+          abort("read failed")
+        }
+      }
+      let blob = try {
+        let base_tree = @lib.parse_tree(base_blob)
+        let over = @lib.parse_overlay(@lib.parse_tree(over_blob))
+        let merged = @lib.apply_overlay(base_tree, over)
+        @lib.encode_tree(merged)
+      } catch {
+        e => {
+          report(base + ": " + error_text(e))
+          abort("apply failed")
+        }
+      }
+      @fs.write_bytes_to_file(output, blob) catch {
+        _ => {
+          report(output + ": write failed")
+          abort("write failed")
+        }
+      }
     }
     Compile(input~, output~) => {
       let text = @fs.read_file_to_string(input) catch {
@@ -271,6 +346,8 @@ fn usage() -> String {
     #|
     #|  -d, --dump      decode a blob and print its tree
     #|  -o, --output    write the compiled blob to a path
+    #|      --plugin    compile a /plugin/ source into a .dtbo
+    #|  -b, --base      apply this overlay to the given base blob
     #|  -h, --help      print this message
     #|  -V, --version   print the version
   )

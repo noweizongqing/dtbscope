@@ -1,0 +1,15 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "noweizongqing/dtbscope/wasm"
+
+// Values
+pub fn compile_source(Bytes) -> Bytes
+
+pub fn dump_blob(Bytes) -> Bytes
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits
