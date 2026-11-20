@@ -1,10 +1,21 @@
 #!/usr/bin/env bash
-# Regenerates the checked-in DTB fixtures from their DTS sources.
+# Regenerates the checked-in device tree fixtures from their sources.
 #
 # Fixtures are compiled once and committed so that `moon test` runs without
 # dtc. This script exists so that the committed bytes can be reproduced: CI
 # runs it with --check and fails if the result differs from what is in the
 # tree, which catches a fixture edited by hand or a dtc version change.
+#
+# Three kinds of source are handled, told apart by what the file contains
+# rather than by its name, so that renaming one does not silently change how it
+# is compiled:
+#
+#   /plugin/   a source of patches; needs -@ so its own labels are exported and
+#              its output is named .dtbo
+#   labels     a base tree something overlays onto; needs -@ so __symbols__
+#              exists, or no overlay can resolve against it
+#   plain      everything else; no -@, because adding it writes a __symbols__
+#              node dtc would not otherwise emit and the comparison fails
 
 set -euo pipefail
 
@@ -17,20 +28,40 @@ if ! command -v dtc >/dev/null 2>&1; then
   exit 1
 fi
 
+# Files that need -@ but are not plugins: their labels have to be exported for
+# an overlay to refer to them.
+base_trees="overlay-base"
+
 compiled=0
 failed=0
 
-# `.pre.dts` files are already through cpp, so dtc is run with -I dts exactly
-# as for a plain source; the extension only marks provenance.
 for src in "$fixtures"/*.dts "$fixtures"/*.pre.dts; do
   [ -e "$src" ] || continue
   base="${src%.pre.dts}"
   base="${base%.dts}"
-  out="$base.dtb"
+  stem="$(basename "$base")"
+
+  flags=()
+  ext="dtb"
+  if grep -q '^[[:space:]]*/plugin/' "$src"; then
+    flags+=("-@")
+    ext="dtbo"
+  elif printf '%s\n' $base_trees | grep -qx "$stem"; then
+    flags+=("-@")
+  fi
+
+  out="$base.$ext"
   tmp="$(mktemp)"
-  # -I dts -O dtb is the only direction needed for fixtures: the DTS sources
-  # are the readable form and the DTB is what the tests parse.
-  if ! dtc -q -I dts -O dtb -o "$tmp" "$src" 2>/dev/null; then
+  # An empty array expands to nothing under `set -u` only with this guard, so
+  # the two cases are written out rather than relying on `"${flags[@]}"`.
+  if [ ${#flags[@]} -eq 0 ]; then
+    ok=0
+    dtc -q -I dts -O dtb -o "$tmp" "$src" 2>/dev/null || ok=1
+  else
+    ok=0
+    dtc -q "${flags[@]}" -I dts -O dtb -o "$tmp" "$src" 2>/dev/null || ok=1
+  fi
+  if [ "$ok" -ne 0 ]; then
     echo "dtc rejected $src" >&2
     failed=1
     rm -f "$tmp"
