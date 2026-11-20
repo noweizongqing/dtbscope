@@ -75,7 +75,7 @@ jobs:
         run: |
           ./tools/build-web.sh
           node --input-type=module -e "
-            import { decompile_blob, compile_source } from './web/dist/wasm.js';
+            import { decompile_blob, compile_source, dump_blob } from './web/dist/wasm.js';
             import { readFileSync, writeFileSync } from 'node:fs';
             const enc = new TextEncoder();
             const dec = new TextDecoder();
