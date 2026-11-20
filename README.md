@@ -21,8 +21,9 @@ this project is built around.
 
 ## Status
 
-Early. The blob header parses and is validated; the struct and strings blocks
-are next.
+Working end to end. Compiles DTS to DTB, reads DTB back, generates and applies
+overlays. Every fixture is byte-identical to what dtc produces for the same
+source.
 
 | Capability | Status |
 |---|---|
@@ -31,19 +32,60 @@ are next.
 | Bounds-checked primitive reads | done |
 | Struct block walk (nodes, properties) | done |
 | Strings block lookup | done |
-| Nesting limit and cycle guard | done |
-| DTS lexer: identifiers, strings, numbers, comments | done |
+| Nesting limit | done |
+| DTS lexer: identifiers, strings, numbers, comments, cpp markers | done |
 | DTS parser: nodes, properties, typed values | done |
 | Labels, `&label` and `&{/path}` references | done |
-| `/bits/` and `/memreserve/` | done |
+| `/bits/`, `/memreserve/`, `/plugin/` | done |
 | DTB writer | done |
-| Byte-identical to dtc on all three fixtures | done |
-| CLI: compile and dump modes | done |
-| Reference resolution, phandle assignment | done |
-| DTS emitter | not started |
-| Overlay generation from `/plugin/` sources | done |
-| Overlay application onto a base tree | done |
-| Browser demo (JS backend) | done |
+| Reference resolution, phandle numbering | done |
+| Overlay generation, `__fixups__` | done |
+| Overlay application, merge semantics | done |
+| CLI: dump, compile, plugin compile, apply | done |
+| Browser demo (JavaScript backend) | done |
+| DTS emitter (tree back to readable source) | not started |
+| C preprocessor, `/incbin/` | out of scope |
+
+### Verified against dtc
+
+Every blob this module writes is compared byte for byte with dtc's output for
+the same source. Four fixtures:
+
+| Fixture | Size | Nodes | What it covers |
+|---|---|---|---|
+| `minimal` | 357 B | 4 | flat tree, strings and cells |
+| `nested` | 1 086 B | 12 | CPU subtree, phandle, multi-line `reg`, empty `ranges` |
+| `realview-pb1176` | 9 983 B | 69 | ARM board from the Linux tree: aliases, dma-ranges, 14 phandles |
+| `overlay-uart` | 381 B | 4 | `/plugin/` patches, `__fixups__` |
+
+The RealView fixture is the one that matters. It is where the phandle
+numbering rule surfaced: the two hand-written fixtures agree with dtc under
+both orderings this project tried, and only a tree with fourteen references
+tells them apart.
+
+### Size
+
+| Part | Lines |
+|---|---|
+| Library | 3 794 |
+| Tests (`*_wbtest.mbt`) | 1 264 |
+| CLI and browser entry points | 465 |
+
+46 tests. `moon check --deny-warn` and `moon fmt --check` are clean.
+
+## Performance
+
+Measured on an M-series Mac, Node 22, JavaScript backend, after warm-up:
+
+| Operation | Time |
+|---|---|
+| Parse and render a 9 983-byte blob (69 nodes) | 0.24 ms |
+| Throughput | ~4 300 parses/s |
+| Compile the same source from the CLI, process start included | 20–60 ms |
+
+Speed was never the constraint: a device tree is read once at boot and is a
+few kilobytes. The number matters only as a ceiling, and the ceiling is far
+above anything a boot path needs.
 
 ## Quick start
 
