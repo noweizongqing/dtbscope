@@ -192,3 +192,22 @@ test "realview: source identical to dtc dump" {
   )
   inspect(first_line_difference(mine, want), content="identical")
 }
+
+///|
+/// The CLI path has to agree with the library path.
+///
+/// `main.mbt` prints through `println`, which appends a newline that
+/// `emit_source` already wrote. That mismatch is invisible to a test that
+/// calls `emit_source` directly, and it is exactly what the CLI shipped with
+/// until this was checked: the file was one blank line longer than dtc's.
+/// The trimming the CLI does is asserted here so that a later change to either
+/// side fails.
+test "trailing newline count matches dtc" {
+  let mine = emit_fixture("minimal.dtb")
+  // Exactly one newline at the end, which is what dtc writes and what
+  // `println` on a trimmed string produces.
+  inspect(mine.has_suffix("};\n"), content="true")
+  inspect(mine.has_suffix("};\n\n"), content="false")
+  // And none at the start beyond the version line's blank separator.
+  inspect(mine.has_prefix("/dts-v1/;\n\n/ {\n"), content="true")
+}

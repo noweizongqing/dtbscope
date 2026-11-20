@@ -153,7 +153,16 @@ fn main {
           abort("decompile failed")
         }
       }
-      println(text)
+      // `emit_source` already ends with the newline dtc writes after the final
+      // `};`. The standard library only offers `println`, which appends one
+      // more, so the trailing newline is dropped here and `println` puts it
+      // back: the result is exactly one, matching `dtc -O dts`.
+      let trimmed = if text.has_suffix("\n") {
+        text[:text.length() - 1].to_owned()
+      } else {
+        text
+      }
+      println(trimmed)
     }
     CompileOverlay(input~, output~) => {
       let text = @fs.read_file_to_string(input) catch {
