@@ -31,6 +31,13 @@
     font-size: 13px; line-height: 1.5;
   }
   #out:empty { display: none; }
+  #tabs { margin-top: 1.25rem; display: flex; gap: .5rem; }
+  #tabs button {
+    font: inherit; font-size: 12px; padding: .3rem .7rem; cursor: pointer;
+    background: transparent; color: var(--dim);
+    border: 1px solid #8884; border-radius: 5px;
+  }
+  #tabs button.on { color: var(--fg); border-color: #3b82f6; background: #3b82f614; }
   input[type=file] { display: none; }
   footer { margin-top: 3rem; color: var(--dim); font-size: 12px; }
   footer a { color: inherit; }
@@ -48,6 +55,10 @@
 <div id="drop">drop a <strong>.dtb</strong> here, or click to choose one</div>
 <input type="file" id="file" accept=".dtb,.dtbo,application/octet-stream">
 <div id="status"></div>
+<nav id="tabs" hidden>
+  <button data-view="source" class="on">source</button>
+  <button data-view="dump">dump</button>
+</nav>
 <div id="out"></div>
 
 <footer>
@@ -59,7 +70,7 @@
 // The MoonBit JS backend emits an ES module plus its own runtime in the same
 // directory. `Bytes` maps to `Uint8Array` on this side, so no marshalling is
 // needed either way.
-import { dump_blob } from "./wasm.js";
+import { dump_blob, decompile_blob } from "./wasm.js";
 
 const drop = document.getElementById("drop");
 const fileInput = document.getElementById("file");
@@ -67,6 +78,26 @@ const out = document.getElementById("out");
 const status = document.getElementById("status");
 
 const decode = new TextDecoder("utf-8", { fatal: false });
+const tabs = document.getElementById("tabs");
+
+// The two views answer different questions. `source` is text dtc can compile
+// back; `dump` is a flattened reading aid that shows every property on its own
+// line. Keeping both means a viewer can switch without reloading the file.
+let current = null;
+
+function renderView(view) {
+  if (!current) return;
+  const fn = view === "dump" ? dump_blob : decompile_blob;
+  const text = decode.decode(fn(current.blob));
+  if (text.startsWith("!")) {
+    showError(text);
+    return;
+  }
+  out.textContent = text;
+  for (const b of tabs.querySelectorAll("button")) {
+    b.classList.toggle("on", b.dataset.view === view);
+  }
+}
 
 function showError(message) {
   status.className = "err";
@@ -81,19 +112,15 @@ async function readFile(f) {
   status.textContent = `reading ${f.name} · ${f.size} bytes`;
   out.textContent = "";
   const bytes = new Uint8Array(await f.arrayBuffer());
-  let result;
+  current = { blob: bytes, name: f.name, size: f.size };
+  tabs.hidden = false;
   try {
-    result = dump_blob(bytes);
+    renderView("source");
   } catch (e) {
     showError(`parser failed: ${e}`);
     return;
   }
-  const text = decode.decode(result);
-  if (text.startsWith("!")) {
-    showError(text);
-    return;
-  }
-  out.textContent = text;
+  const text = decode.decode(dump_blob(bytes));
   const nodes = text.split("\n").filter(l => l.startsWith("/")).length;
   status.textContent = `${f.name} · ${f.size} bytes · ${nodes} nodes`;
 }
@@ -117,6 +144,11 @@ drop.addEventListener("drop", e => {
   const f = e.dataTransfer.files[0];
   if (f) readFile(f);
 });
+tabs.addEventListener("click", e => {
+  const view = e.target?.dataset?.view;
+  if (view) renderView(view);
+});
+
 window.addEventListener("dragover", e => e.preventDefault());
 window.addEventListener("drop", e => e.preventDefault());
 </script>

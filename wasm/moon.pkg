@@ -9,5 +9,7 @@ import {
 // module a page can import directly.
 
 options(
-  link: { "js": { "exports": [ "dump_blob", "compile_source" ] } },
+  link: {
+    "js": { "exports": [ "dump_blob", "decompile_blob", "compile_source" ] },
+  },
 )

@@ -37,6 +37,10 @@ failed=0
 
 for src in "$fixtures"/*.dts "$fixtures"/*.pre.dts; do
   [ -e "$src" ] || continue
+  # `.expected.dts` files are dtc's own output, checked in so the emitter test
+  # can compare against it. Compiling them would produce a fixture nothing
+  # reads.
+  case "$src" in *.expected.dts) continue ;; esac
   base="${src%.pre.dts}"
   base="${base%.dts}"
   stem="$(basename "$base")"

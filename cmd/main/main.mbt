@@ -10,6 +10,8 @@
 enum Mode {
   /// Decode a blob and print the tree.
   Dump(String)
+  /// Decode a blob and print it as device tree source.
+  Decompile(String)
   /// Compile a source file to a blob.
   Compile(input~ : String, output~ : String)
   /// Compile with `/plugin/` handling, producing a .dtbo.
@@ -32,6 +34,7 @@ fn parse_args(args : Array[String]) -> Mode raise {
   let mut output : String? = None
   let mut dump = false
   let mut plugin = false
+  let mut decompile = false
   let mut base : String? = None
   let mut i = 0
   while i < args.length() {
@@ -48,6 +51,8 @@ fn parse_args(args : Array[String]) -> Mode raise {
       output = Some(args[i])
     } else if arg == "-d" || arg == "--dump" {
       dump = true
+    } else if arg == "-D" || arg == "--decompile" {
+      decompile = true
     } else if arg == "--plugin" {
       plugin = true
     } else if arg == "-b" || arg == "--base" {
@@ -70,6 +75,8 @@ fn parse_args(args : Array[String]) -> Mode raise {
     Some(path) =>
       if dump {
         Dump(path)
+      } else if decompile {
+        Decompile(path)
       } else {
         match (output, base) {
           (Some(out), Some(base_path)) =>
@@ -117,6 +124,21 @@ fn main {
         _ => {
           report(path + ": read failed")
           abort("read failed")
+        }
+      }
+      println(text)
+    }
+    Decompile(path) => {
+      let blob = @fs.read_file_to_bytes(path) catch {
+        _ => {
+          report(path + ": read failed")
+          abort("read failed")
+        }
+      }
+      let text = @lib.emit_source(@lib.parse_tree(blob)) catch {
+        e => {
+          report(path + ": " + error_text(e))
+          abort("decompile failed")
         }
       }
       println(text)
@@ -345,6 +367,7 @@ fn usage() -> String {
     #|usage: dtbscope <input> [-d] [-o <output>]
     #|
     #|  -d, --dump      decode a blob and print its tree
+    #|  -D, --decompile decode a blob and print it as device tree source
     #|  -o, --output    write the compiled blob to a path
     #|      --plugin    compile a /plugin/ source into a .dtbo
     #|  -b, --base      apply this overlay to the given base blob

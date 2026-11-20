@@ -41,9 +41,10 @@ source.
 | Reference resolution, phandle numbering | done |
 | Overlay generation, `__fixups__` | done |
 | Overlay application, merge semantics | done |
-| CLI: dump, compile, plugin compile, apply | done |
+| CLI: dump, decompile, compile, plugin compile, apply | done |
+| Source emitter, byte-identical to dtc's dump | done |
 | Browser demo (JavaScript backend) | done |
-| DTS emitter (tree back to readable source) | not started |
+| DTS emitter (tree back to readable source) | done |
 | C preprocessor, `/incbin/` | out of scope |
 
 ### Verified against dtc
@@ -57,6 +58,11 @@ the same source. Four fixtures:
 | `nested` | 1 086 B | 12 | CPU subtree, phandle, multi-line `reg`, empty `ranges` |
 | `realview-pb1176` | 9 983 B | 69 | ARM board from the Linux tree: aliases, dma-ranges, 14 phandles |
 | `overlay-uart` | 381 B | 4 | `/plugin/` patches, `__fixups__` |
+
+The other direction is checked the same way: `emit_source` on a blob produces
+the text `dtc -I dtb -O dts` prints, byte for byte. That includes the 559-line
+dump of the RealView board, which has every value shape the fixtures contain.
+The output is kept in `internal/fixtures/realview-pb1176.expected.dts`.
 
 The RealView fixture is the one that matters. It is where the phandle
 numbering rule surfaced: the two hand-written fixtures agree with dtc under
@@ -128,6 +134,7 @@ verifies it still matches, which is what CI runs.
 | `dts_token.mbt` | Token kinds, spans, scanner state |
 | `dts_lex.mbt` | Character rules and token scanning |
 | `dts_parse.mbt` | Source grammar, value parsing, source tree |
+| `dts_emit.mbt` | Tree back to source, byte-identical to dtc's dump |
 | `phandle.mbt` | Label table, phandle numbering, reference rewrite |
 | `dtb_write.mbt` | Blob encoder |
 | `cmd/main/` | Command line front end |

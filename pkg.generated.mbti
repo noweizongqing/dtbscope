@@ -10,6 +10,8 @@ pub fn apply_overlay(Tree, Overlay) -> Tree raise OverlayError
 
 pub fn build_overlay(SourceFile) -> SourceFile raise OverlayError
 
+pub fn emit_source(Tree) -> String
+
 pub fn encode_blob(SourceFile) -> Bytes raise DtbError
 
 pub fn encode_tree(Tree) -> Bytes

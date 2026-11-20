@@ -4,6 +4,8 @@ package "noweizongqing/dtbscope/wasm"
 // Values
 pub fn compile_source(Bytes) -> Bytes
 
+pub fn decompile_blob(Bytes) -> Bytes
+
 pub fn dump_blob(Bytes) -> Bytes
 
 // Errors

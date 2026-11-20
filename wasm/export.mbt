@@ -109,3 +109,16 @@ fn render_value(value : Bytes) -> String {
     buf.to_string()
   }
 }
+
+///|
+/// Renders a blob as device tree source, the way `dtc -I dtb -O dts` would.
+///
+/// Separate from `dump_blob` because the two answer different questions: the
+/// dump is a reading aid with every property flattened, while this produces
+/// text that `dtc` can compile back.
+pub fn decompile_blob(blob : Bytes) -> Bytes {
+  let text = @lib.emit_source(@lib.parse_tree(blob)) catch {
+    e => "!" + e.to_string()
+  }
+  @utf8.encode(text)
+}
