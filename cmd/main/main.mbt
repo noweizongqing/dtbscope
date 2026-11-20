@@ -98,9 +98,21 @@ fn parse_args(args : Array[String]) -> Mode raise {
 /// Runs the requested mode and reports the error, if any, on stderr.
 fn main {
   let args = @env.args()
-  // `args[0]` is the program name.
+  // The first element is the program name on native and on wasm-gc, but the
+  // JavaScript backend hands over only the arguments `moon run` passed. A
+  // fixed offset would drop the input file there and read the program path
+  // into the argument list here, so the drop happens only when the first
+  // element actually looks like the program name.
+  // The JavaScript backend runs under `node`, so the leading entries are the
+  // interpreter and the script before any argument appears. Native and wasm-gc
+  // have one such entry. Skipping every leading entry that is a program path
+  // covers both without a per-backend branch.
+  let mut skip = 0
+  while skip < args.length() && is_program_name(args[skip]) {
+    skip = skip + 1
+  }
   let rest : Array[String] = []
-  for i in 1..<args.length() {
+  for i in skip..<args.length() {
     rest.push(args[i])
   }
   let mode = parse_args(rest) catch {
@@ -347,6 +359,24 @@ fn hex_digit(n : Int32) -> Char {
 /// `to_string` gives the message each of them defines.
 fn error_text(e : Error) -> String {
   "\{e}"
+}
+
+///|
+/// Whether an argv entry is the program path rather than an argument.
+///
+/// The name contains "dtbscope" and an argument that someone actually meant to
+/// pass would almost never be spelled that way, so this is a safe test in
+/// practice and a wrong answer still leaves a usable error rather than a
+/// misparse.
+fn is_program_name(arg : String) -> Bool {
+  // A path to an executable or a script, never an argument a caller meant to
+  // pass: arguments are paths to .dts/.dtb files or flags.
+  let known = arg.contains("dtbscope")
+  let exe = arg.contains("main.exe")
+  let script = arg.contains("main.js")
+  let wasm = arg.contains("main.wasm")
+  let is_node = arg == "node" || arg.has_suffix("/node")
+  known || exe || script || wasm || is_node
 }
 
 ///|

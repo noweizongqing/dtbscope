@@ -55,3 +55,31 @@ jobs:
 
       - name: Regenerate fixtures and confirm they still match
         run: ./tools/gen-fixtures.sh --check
+
+      # Byte-identical output is the project's central claim, and a backend
+      # difference would break it silently: the wasm-gc and native builds get
+      # the same source, but the JavaScript one runs under node and sees a
+      # different argv. Compiling the same fixture on each and comparing
+      # against the checked-in blob catches that class of divergence.
+      - name: Every backend produces the same blob
+        run: |
+          for target in wasm-gc js native; do
+            moon build --target "$target" --release
+            moon run --target "$target" cmd/main -- \
+              internal/fixtures/realview-pb1176.pre.dts -o "/tmp/$target.dtb"
+            cmp "/tmp/$target.dtb" internal/fixtures/realview-pb1176.dtb
+            echo "$target: byte-identical"
+          done
+
+      - name: Browser module decodes and re-emits a blob
+        run: |
+          ./tools/build-web.sh
+          node --input-type=module -e "
+            import { decompile_blob } from './web/dist/wasm.js';
+            import { readFileSync } from 'node:fs';
+            const blob = new Uint8Array(readFileSync('internal/fixtures/realview-pb1176.dtb'));
+            const got = new TextDecoder().decode(decompile_blob(blob));
+            const want = readFileSync('internal/fixtures/realview-pb1176.expected.dts', 'utf8');
+            if (got !== want) { console.error('browser module output differs'); process.exit(1); }
+            console.log('browser module: byte-identical');
+          "
