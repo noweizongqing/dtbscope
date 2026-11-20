@@ -73,11 +73,11 @@ tells them apart.
 
 | Part | Lines |
 |---|---|
-| Library | 3 794 |
-| Tests (`*_wbtest.mbt`) | 1 264 |
-| CLI and browser entry points | 465 |
+| Library | 4 011 |
+| Tests (`*_wbtest.mbt`) | 1 458 |
+| CLI and browser entry points | 531 |
 
-46 tests. `moon check --deny-warn` and `moon fmt --check` are clean.
+52 tests. `moon check --deny-warn` and `moon fmt --check` are clean.
 
 ## Performance
 
@@ -105,6 +105,14 @@ Encode a source file and compare it with dtc:
 moon run cmd/main -- internal/fixtures/nested.dts -o /tmp/out.dtb
 dtc -q -I dts -O dtb -o /tmp/dtc.dtb internal/fixtures/nested.dts
 cmp /tmp/out.dtb /tmp/dtc.dtb
+```
+
+And back:
+
+```sh
+moon run cmd/main -- /tmp/out.dtb -D > /tmp/round.dts
+dtc -q -I dtb -O dts -o /tmp/dtc.dts /tmp/out.dtb
+diff /tmp/round.dts /tmp/dtc.dts
 ```
 
 Three fixtures. `minimal.dtb` is a flat board tree; `nested.dtb` has a CPU
