@@ -76,7 +76,7 @@ jobs:
           ./tools/build-web.sh
           node --input-type=module -e "
             import { decompile_blob, compile_source } from './web/dist/wasm.js';
-            import { readFileSync } from 'node:fs';
+            import { readFileSync, writeFileSync } from 'node:fs';
             const enc = new TextEncoder();
             const dec = new TextDecoder();
 
@@ -117,4 +117,15 @@ jobs:
               process.exit(1);
             }
             console.log('browser module: errors are reported as text');
+
+            // The CLI and the browser module render the same tree through the
+            // same library function now. They used to carry separate copies
+            // and the browser one silently dropped the tail of any value whose
+            // length was not a multiple of four bytes. Comparing the two end
+            // to end is what keeps that from creeping back.
+            const cli = dec.decode(dump_blob(blob));
+            writeFileSync('/tmp/browser-dump.txt', cli);
           "
+          moon run --target js cmd/main -- internal/fixtures/realview-pb1176.dtb -d > /tmp/cli-dump.txt
+          cmp /tmp/cli-dump.txt /tmp/browser-dump.txt
+          echo "cli and browser dumps agree"

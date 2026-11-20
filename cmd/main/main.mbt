@@ -141,7 +141,16 @@ fn main {
           abort("dump failed")
         }
       }
-      println(text)
+      // `dump_tree` already ends with the newline after the last property, and
+      // `println` would add a second. The decompile branch below trims for the
+      // same reason; keeping the two outputs identical means a blob read in the
+      // terminal and in the browser produces the same text.
+      let trimmed = if text.has_suffix("\n") {
+        text[:text.length() - 1].to_owned()
+      } else {
+        text
+      }
+      println(trimmed)
     }
     Decompile(path) => {
       let blob = @fs.read_file_to_bytes(path) catch {
@@ -252,115 +261,7 @@ fn main {
 ///|
 /// Reads a blob and renders its tree.
 fn dump_blob(blob : Bytes) -> String raise {
-  let header = @lib.parse_header(blob)
-  let struct_bounds = @lib.Bounds::of_range(
-    blob,
-    header.off_dt_struct,
-    header.off_dt_struct + header.size_dt_struct,
-  )
-  let strings_bounds = @lib.Bounds::of_range(
-    blob,
-    header.off_dt_strings,
-    header.off_dt_strings + header.size_dt_strings,
-  )
-  let tree = @lib.parse_struct(struct_bounds, strings_bounds)
-  let buf = StringBuilder()
-  render_node(tree.root, "/", buf)
-  for w in tree.warnings {
-    buf.write_string("# warning: " + w.to_string() + "\n")
-  }
-  buf.to_string()
-}
-
-///|
-/// Writes a node and its children as `path` lines with indented properties.
-///
-/// Values are shown as a cell list or a quoted string, whichever the bytes
-/// support. This is a reading aid, not a source emitter: recompiling the output
-/// would need the cell/size schemas that a blob does not carry.
-fn render_node(node : @lib.Node, path : String, buf : StringBuilder) -> Unit {
-  buf.write_string(path + "\n")
-  for p in node.properties {
-    buf.write_string("  " + p.name + " = " + render_value(p.value) + "\n")
-  }
-  for c in node.children {
-    let child_path = if path == "/" {
-      "/" + c.name
-    } else {
-      path + "/" + c.name
-    }
-    render_node(c, child_path, buf)
-  }
-}
-
-///|
-/// Renders a property value.
-fn render_value(value : Bytes) -> String {
-  let n = value.length()
-  if n == 0 {
-    return "<>"
-  }
-  // A value counts as a string when it ends in NUL and everything before it is
-  // printable ASCII, which is how dtc decides when printing.
-  let mut is_text = value.at(n - 1).to_int() == 0
-  if is_text {
-    for i in 0..<(n - 1) {
-      let b = value.at(i).to_int()
-      if b < 0x20 || b > 0x7E {
-        is_text = false
-      }
-    }
-  }
-  if is_text {
-    let buf = StringBuilder()
-    buf.write_string("\"")
-    for i in 0..<(n - 1) {
-      buf.write_char(value.at(i).to_int().unsafe_to_char())
-    }
-    buf.write_string("\"")
-    buf.to_string()
-  } else {
-    let buf = StringBuilder()
-    buf.write_string("<")
-    let mut at = 0
-    let mut first = true
-    while at + 4 <= n {
-      // Accumulate in UInt64 so a cell with bit 31 set prints as 0x80000000
-      // rather than sign-extending to a value near 2^64.
-      let raw = (value.at(at).to_int().to_uint64() << 24) |
-        (value.at(at + 1).to_int().to_uint64() << 16) |
-        (value.at(at + 2).to_int().to_uint64() << 8) |
-        value.at(at + 3).to_int().to_uint64()
-      if !first {
-        buf.write_string(" ")
-      }
-      first = false
-      buf.write_string(raw.to_string())
-      at = at + 4
-    }
-    if at < n {
-      // A tail shorter than a word is a byte string, printed as hex.
-      buf.write_string(" bytes:")
-      while at < n {
-        let b = value.at(at).to_int()
-        buf.write_char(hex_digit((b >> 4) & 0xF))
-        buf.write_char(hex_digit(b & 0xF))
-        at = at + 1
-      }
-    }
-    buf.write_string(">")
-    buf.to_string()
-  }
-}
-
-///|
-/// One hex digit as a character.
-fn hex_digit(n : Int32) -> Char {
-  if n < 10 {
-    (0x30 + n).unsafe_to_char()
-  } else {
-    (0x61 + n - 10).unsafe_to_char()
-  }
+  @lib.dump_tree(@lib.parse_tree(blob))
 }
 
 ///|

@@ -73,11 +73,11 @@ tells them apart.
 
 | Part | Lines |
 |---|---|
-| Library | 4 011 |
-| Tests (`*_wbtest.mbt`) | 1 640 |
-| CLI and browser entry points | 543 |
+| Library | 4 126 |
+| Tests (`*_wbtest.mbt`) | 1 710 |
+| CLI and browser entry points | 366 |
 
-60 tests. `moon check --deny-warn` and `moon fmt --check` are clean.
+66 tests. `moon check --deny-warn` and `moon fmt --check` are clean.
 
 ## Performance
 
@@ -143,6 +143,7 @@ verifies it still matches, which is what CI runs.
 | `dts_lex.mbt` | Character rules and token scanning |
 | `dts_parse.mbt` | Source grammar, value parsing, source tree |
 | `dts_emit.mbt` | Tree back to source, byte-identical to dtc's dump |
+| `dump.mbt` | Flat tree reading, shared by the CLI and the browser module |
 | `phandle.mbt` | Label table, phandle numbering, reference rewrite |
 | `dtb_write.mbt` | Blob encoder |
 | `cmd/main/` | Command line front end |
