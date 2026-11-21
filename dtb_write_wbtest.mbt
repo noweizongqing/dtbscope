@@ -195,20 +195,11 @@ test "encode_tree: round-trips every fixture" {
 }
 
 ///|
-/// Decodes a blob into a tree, for the round-trip test above.
+/// Decodes a blob the way the CLI does, so the test covers the same path a
+/// caller takes: `parse_tree` reads the header, both blocks and the
+/// reservation map, while `parse_struct` on its own sees only the node tree.
 fn decode_blob(blob : Bytes) -> Tree raise {
-  let header = parse_header(blob)
-  let struct_bounds = Bounds::of_range(
-    blob,
-    header.off_dt_struct,
-    header.off_dt_struct + header.size_dt_struct,
-  )
-  let strings_bounds = Bounds::of_range(
-    blob,
-    header.off_dt_strings,
-    header.off_dt_strings + header.size_dt_strings,
-  )
-  parse_struct(struct_bounds, strings_bounds)
+  parse_tree(blob)
 }
 
 ///|
@@ -260,4 +251,39 @@ test "bits 64 keeps both halves" {
   let read = Bounds::of_bytes(value)
   let (v, _) = read.read_u64(Cursor::big(0L))
   inspect(v, content="1311768467294899695")
+}
+
+///|
+/// A reservation survives decoding and re-encoding.
+///
+/// `Tree` used to carry only the node tree, so `encode_tree` rebuilt the
+/// reservation map as a bare terminator and the blob came back shorter. It
+/// still parsed, and no test looked at the length, so a merge that passed
+/// reservations through would have dropped them silently.
+test "encode_tree keeps reservations" {
+  let src =
+    #|/dts-v1/;
+    #|/memreserve/ 0x1000 0x100;
+    #|/memreserve/ 0x200000000 0x400;
+    #|/ { };
+  let original = encode_blob(parse_source(src))
+  let again = encode_tree(parse_tree(original))
+  inspect(first_difference(again, original), content="identical")
+}
+
+///|
+/// The reservation map reaches the emitted source, in dtc's format.
+///
+/// Both halves print as 16 hex digits with a tab after `/memreserve/`, and
+/// there is no blank line between the last reservation and the root node.
+test "emit_source prints reservations" {
+  let src =
+    #|/dts-v1/;
+    #|/memreserve/ 0x1000 0x100;
+    #|/ { };
+  let text = emit_source(parse_tree(encode_blob(parse_source(src))))
+  inspect(
+    text.contains("/memreserve/\t0x0000000000001000 0x0000000000000100;\n/ {"),
+    content="true",
+  )
 }

@@ -447,7 +447,7 @@ pub fn apply_overlay(base : Tree, overlay : Overlay) -> Tree raise OverlayError 
   // Placeholder words in the applied body are now resolvable: the base tree
   // gave those nodes their numbers.
   root = patch_placeholders(root, overlay, symbols, phandles)
-  { root, warnings: base.warnings, }
+  { root, warnings: base.warnings, memreserves: base.memreserves, }
 }
 
 ///|
@@ -805,7 +805,8 @@ pub fn parse_tree(blob : Bytes) -> Tree raise DtbError {
     header.off_dt_strings,
     header.off_dt_strings + header.size_dt_strings,
   )
-  parse_struct(struct_bounds, strings_bounds)
+  let memreserves = parse_memreserves(blob, header)
+  parse_struct_with(struct_bounds, strings_bounds, memreserves)
 }
 
 ///|
@@ -822,6 +823,11 @@ pub fn encode_tree(tree : Tree) -> Bytes {
   let strings_bytes = strings.to_bytes()
   let struct_bytes = struct_block.to_bytes()
   let memreserve = Buffer()
+  for (address, size) in tree.memreserves {
+    put_u64(memreserve, address)
+    put_u64(memreserve, size)
+  }
+  // The map is terminated by a zero pair, so even an empty one is 16 bytes.
   put_u64(memreserve, 0UL)
   put_u64(memreserve, 0UL)
   let memreserve_bytes = memreserve.to_bytes()

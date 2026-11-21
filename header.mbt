@@ -176,3 +176,57 @@ pub fn Header::is_modern(self : Header) -> Bool {
 pub fn Header::size(self : Header) -> Int64 {
   self.totalsize
 }
+
+///|
+/// Reads the memory reservation map.
+///
+/// The map is a sequence of `(address, size)` big-endian 64-bit pairs ending
+/// with an all-zero pair, which is why an empty map is 16 bytes rather than 0.
+/// A pair whose size is zero is the terminator and is not a reservation; the
+/// address is ignored there because a zero size can reserve nothing.
+///
+/// Reading is bounded by the map's own position, not the file: the terminator
+/// has to appear before the struct block starts, and a run of nonzero pairs
+/// that reaches the struct block means the blob has no terminator at all.
+pub fn parse_memreserves(
+  blob : Bytes,
+  header : Header,
+) -> Array[(UInt64, UInt64)] raise DtbError {
+  let bounds = Bounds::of_bytes(blob)
+  let out : Array[(UInt64, UInt64)] = []
+  let mut at = header.off_mem_rsvmap
+  let stop = header.off_dt_struct
+  while at + 16L <= stop {
+    let (address_raw, next) = bounds.read_u64(Cursor::big(at))
+    let (size_raw, after) = bounds.read_u64(next)
+    // The pair is read as `Int64` because that is what carries 64 bits; the
+    // unsigned reading is what the format means, so the reinterpret is here.
+    // Masking through `to_int` first is what keeps the high half: `Int64` is
+    // 64 bits wide here, so nothing is lost.
+    let address = u64_of_int64(address_raw)
+    let size = u64_of_int64(size_raw)
+    if size == 0UL && address == 0UL {
+      return out
+    }
+    out.push((address, size))
+    at = after.pos
+  }
+  raise Inconsistent(
+    what="mem_rsvmap",
+    detail="has no terminating pair before the struct block",
+  )
+}
+
+///|
+/// Reinterprets the low 32 bits of an `Int64` as signed, then widens back to
+/// `UInt64` without sign extension.
+///
+/// `Int64::to_int` is 32 bits wide on this target, so the upper half is masked
+/// off and the two halves are recombined. Doing it in two steps is what makes
+/// `0xFFFFFFFFFFFFFFFF` come out as that number rather than as -1.
+fn u64_of_int64(v : Int64) -> UInt64 {
+  let hi = ((v >> 32) & 0xFFFF_FFFFL).to_int()
+  let lo = (v & 0xFFFF_FFFFL).to_int()
+  (hi.reinterpret_as_uint().to_uint64() << 32) |
+  lo.reinterpret_as_uint().to_uint64()
+}

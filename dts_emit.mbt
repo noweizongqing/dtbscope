@@ -20,6 +20,13 @@
 pub fn emit_source(tree : Tree) -> String {
   let buf = StringBuilder()
   buf.write_string("/dts-v1/;\n\n")
+  // dtc prints the reservations between the version line and the root, each as
+  // `/memreserve/<tab>0x%016x 0x%016x;`. Both halves are zero-padded to 16
+  // digits, unlike cells, because a reservation is an address rather than a
+  // value and a short form would read as a different address.
+  for (address, size) in tree.memreserves {
+    buf.write_string("/memreserve/\t0x\{pad16(address)} 0x\{pad16(size)};\n")
+  }
   let labels = label_map(tree.root)
   emit_node(tree.root, "", "/", labels, buf)
   // `emit_node` already ends the root with `};\n`, so nothing is added here.
@@ -230,14 +237,17 @@ fn cell_list(value : Bytes) -> String {
 /// whose high bytes are non-zero gets as many digits as it needs.
 fn hex_cell(v : UInt64) -> String {
   let digits = "0123456789abcdef"
-  // Masking to 32 bits before the conversion keeps the bit pattern: a cell
-  // with bit 31 set would otherwise not fit in a signed `Int` and the digits
-  // would come out wrong.
-  let raw = (v & 0xFFFF_FFFFUL).to_int()
+  // Everything here works on the low 32 bits, because that is what a cell is.
+  // Masking before the conversion keeps the bit pattern: a cell with bit 31
+  // set would otherwise not fit in a signed `Int` and the digits come out
+  // wrong. The nibble count reads `cell`, not `v`, so a caller that passes a
+  // wider value gets the low half printed rather than a run of leading zeroes.
+  let cell = v & 0xFFFF_FFFFUL
+  let raw = cell.to_int()
   // Count nibbles from the top: shift right until nothing is left, which is
   // the only way to know how many digits the value needs.
   let mut nibbles = 1
-  let mut probe = v
+  let mut probe = cell
   while probe > 0xFUL {
     probe = probe >> 4
     nibbles = nibbles + 1
@@ -271,5 +281,30 @@ fn byte_string(value : Bytes) -> String {
     buf.write_char(digits.get_char(b & 0xF).unwrap())
   }
   buf.write_string("]")
+  buf.to_string()
+}
+
+///|
+/// Formats a 64-bit value as 16 lowercase hex digits, no `0x`.
+///
+/// `/memreserve/` lines in dtc's output always carry the full width. A cell
+/// gets the natural width instead, but a reservation is an address, and a
+/// reader comparing two dumps would see `0x1000` and `0x0000000000001000` as
+/// different when they name the same place.
+fn pad16(v : UInt64) -> String {
+  let digits = "0123456789abcdef"
+  let buf = StringBuilder()
+  // Split into two 32-bit halves, because a shift count on `UInt64` here has
+  // to be a `UInt` and an `Int` only holds 32 bits. Each half is then printed
+  // eight nibbles at a time from a mask.
+  let hi = ((v >> 32) & 0xFFFF_FFFFUL).to_int()
+  let lo = (v & 0xFFFF_FFFFUL).to_int()
+  for half in [hi, lo] {
+    for i in 0..<8 {
+      let shift = (7 - i) * 4
+      let nibble = (half >> shift) & 0xF
+      buf.write_char(digits.get_char(nibble).unwrap())
+    }
+  }
   buf.to_string()
 }

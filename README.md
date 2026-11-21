@@ -75,11 +75,11 @@ tells them apart.
 
 | Part | Lines |
 |---|---|
-| Library | 4 192 |
-| Tests (`*_wbtest.mbt`) | 1 813 |
+| Library | 4 309 |
+| Tests (`*_wbtest.mbt`) | 1 839 |
 | CLI and browser entry points | 366 |
 
-72 tests. `moon check --deny-warn` and `moon fmt --check` are clean.
+74 tests. `moon check --deny-warn` and `moon fmt --check` are clean.
 
 ## Performance
 

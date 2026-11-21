@@ -20,11 +20,15 @@ pub fn encode_tree(Tree) -> Bytes
 
 pub fn parse_header(Bytes) -> Header raise DtbError
 
+pub fn parse_memreserves(Bytes, Header) -> Array[(UInt64, UInt64)] raise DtbError
+
 pub fn parse_overlay(Tree) -> Overlay raise OverlayError
 
 pub fn parse_source(String) -> SourceFile raise ParseError
 
 pub fn parse_struct(Bounds, Bounds) -> Tree raise DtbError
+
+pub fn parse_struct_with(Bounds, Bounds, Array[(UInt64, UInt64)]) -> Tree raise DtbError
 
 pub fn parse_tree(Bytes) -> Tree raise DtbError
 
@@ -263,6 +267,7 @@ pub impl Show for TokenKind
 pub(all) struct Tree {
   root : Node
   warnings : Array[Warning]
+  memreserves : Array[(UInt64, UInt64)]
 }
 
 pub(all) struct Value {

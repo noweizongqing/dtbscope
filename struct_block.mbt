@@ -102,6 +102,14 @@ pub(all) struct Tree {
   root : Node
   /// Structural defects that were tolerated.
   warnings : Array[Warning]
+  /// Memory reservations, as `(address, size)` pairs.
+  ///
+  /// Carried on the tree rather than dropped by the parser because both ways
+  /// out of a tree need them: `emit_source` prints `/memreserve/` lines and
+  /// `encode_tree` writes the map back. Leaving them behind made a decode and
+  /// re-encode of a blob with reservations produce a shorter blob that still
+  /// parsed, so the loss was silent.
+  memreserves : Array[(UInt64, UInt64)]
 }
 
 ///|
@@ -133,6 +141,20 @@ fn tag_at(bounds : Bounds, offset : Int64) -> StructTag raise DtbError {
 pub fn parse_struct(
   struct_bounds : Bounds,
   strings_bounds : Bounds,
+) -> Tree raise DtbError {
+  parse_struct_with(struct_bounds, strings_bounds, [])
+}
+
+///|
+/// Walks the struct block and attaches a memory reservation list.
+///
+/// Separate from `parse_struct` because the reservations live in their own
+/// block and a caller that only has the struct and strings blocks cannot see
+/// them. `parse_tree`, which has the header, is the caller that passes them.
+pub fn parse_struct_with(
+  struct_bounds : Bounds,
+  strings_bounds : Bounds,
+  memreserves : Array[(UInt64, UInt64)],
 ) -> Tree raise DtbError {
   let nodes = struct_bounds
   let strings = strings_bounds
@@ -223,14 +245,14 @@ pub fn parse_struct(
     }
   }
   match finished {
-    Some(root) => { root, warnings, }
+    Some(root) => { root, warnings, memreserves, }
     None =>
       // No END token was seen. If nothing is left open the tree above is
       // complete and the warning already pushed names the truncation; when
       // nodes are still open the blob is genuinely malformed, because there is
       // no way to know whether the missing levels had children.
       if stack.length() == 1 {
-        { root: stack[0], warnings, }
+        { root: stack[0], warnings, memreserves, }
       } else if stack.length() == 0 {
         raise Inconsistent(what="struct block", detail="contains no root node")
       } else {
