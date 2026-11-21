@@ -210,3 +210,54 @@ fn decode_blob(blob : Bytes) -> Tree raise {
   )
   parse_struct(struct_bounds, strings_bounds)
 }
+
+///|
+/// The reservation map holds 64-bit address and size, and both halves have to
+/// survive.
+///
+/// The earlier test only checked that the block was the right length, which a
+/// wrong address passes: the entry is still 16 bytes. The bug this catches is
+/// that `UInt64::to_int` truncates by value, so a 64-bit write built from it
+/// emitted the low half twice and a reservation at `0x1000` came out at
+/// `0x1000_0000_1000`.
+test "memreserve keeps 64-bit addresses" {
+  let src =
+    #|/dts-v1/;
+    #|/memreserve/ 0x100000000 0x200000000;
+    #|/ { };
+  let mine = encode_blob(parse_source(src))
+  let bounds = Bounds::of_bytes(mine)
+  // The map starts at the header's fixed offset of 40.
+  let (address, after_addr) = bounds.read_u64(Cursor::big(40L))
+  let (size, _) = bounds.read_u64(after_addr)
+  inspect(address, content="4294967296")
+  inspect(size, content="8589934592")
+}
+
+///|
+/// `/bits/ 64` writes both halves of the value.
+///
+/// A 64-bit cell is the one width where the low half alone is not a plausible
+/// answer: the high half is the part that gets lost, and a value with both
+/// halves distinct shows it.
+test "bits 64 keeps both halves" {
+  let src = "/dts-v1/; / { a = /bits/ 64 <0x1234567890abcdef>; };"
+  let blob = encode_blob(parse_source(src))
+  let header = parse_header(blob)
+  let struct_bounds = Bounds::of_range(
+    blob,
+    header.off_dt_struct,
+    header.off_dt_struct + header.size_dt_struct,
+  )
+  let strings_bounds = Bounds::of_range(
+    blob,
+    header.off_dt_strings,
+    header.off_dt_strings + header.size_dt_strings,
+  )
+  let tree = parse_struct(struct_bounds, strings_bounds)
+  let value = tree.root.properties[0].value
+  inspect(value.length(), content="8")
+  let read = Bounds::of_bytes(value)
+  let (v, _) = read.read_u64(Cursor::big(0L))
+  inspect(v, content="1311768467294899695")
+}

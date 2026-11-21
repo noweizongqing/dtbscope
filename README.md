@@ -50,15 +50,16 @@ source.
 ### Verified against dtc
 
 Every blob this module writes is compared byte for byte with dtc's output for
-the same source. Four fixtures:
+the same source. Six fixtures:
 
 | Fixture | Size | Nodes | What it covers |
 |---|---|---|---|
-| `minimal` | 357 B | 4 | flat tree, strings and cells |
-| `nested` | 1 086 B | 12 | CPU subtree, phandle, multi-line `reg`, empty `ranges` |
-| `realview-pb1176` | 9 983 B | 69 | ARM board from the Linux tree: aliases, dma-ranges, 14 phandles |
+| `minimal` | 357 B | 3 | flat tree, strings and cells |
+| `nested` | 1 086 B | 9 | CPU subtree, phandle, multi-line `reg`, empty `ranges` |
+| `overlay-base` | 657 B | 5 | base tree built with `-@`: `__symbols__`, a phandle |
+| `overlay-labels` | 403 B | 4 | three labels on one node, label order on the way back out |
 | `overlay-uart` | 381 B | 4 | `/plugin/` patches, `__fixups__` |
-| `overlay-labels` | 403 B | 3 | three labels on one node, `__symbols__` round trip |
+| `realview-pb1176` | 9 983 B | 69 | ARM board from the Linux tree: aliases, dma-ranges, 14 phandles |
 
 The other direction is checked the same way: `emit_source` on a blob produces
 the text `dtc -I dtb -O dts` prints, byte for byte. That includes the 559-line
@@ -75,10 +76,10 @@ tells them apart.
 | Part | Lines |
 |---|---|
 | Library | 4 184 |
-| Tests (`*_wbtest.mbt`) | 1 761 |
+| Tests (`*_wbtest.mbt`) | 1813 |
 | CLI and browser entry points | 366 |
 
-70 tests. `moon check --deny-warn` and `moon fmt --check` are clean.
+72 tests. `moon check --deny-warn` and `moon fmt --check` are clean.
 
 ## Performance
 
@@ -116,11 +117,14 @@ dtc -q -I dtb -O dts -o /tmp/dtc.dts /tmp/out.dtb
 diff /tmp/round.dts /tmp/dtc.dts
 ```
 
-Three fixtures. `minimal.dtb` is a flat board tree; `nested.dtb` has a CPU
+Six fixtures. `minimal.dtb` is a flat board tree; `nested.dtb` has a CPU
 subtree, an interrupt controller with a phandle and a `ranges` property that
-encodes to nothing; `realview-pb1176` is the ARM RealView PB1176 from the Linux
-tree, 68 nodes with aliases, dma-ranges and 14 phandles. All three are compared
-byte for byte against dtc, and node by node against `dtc -I dtb -O dts`.
+encodes to nothing; `overlay-base` and `overlay-labels` are the two built with
+`-@`, so they carry `__symbols__`; `overlay-uart` is the plugin that patches the
+first; `realview-pb1176` is the ARM RealView PB1176 from the Linux tree, 69
+nodes with aliases, dma-ranges and 14 phandles. Every one is compared byte for
+byte against dtc in the compile direction, and against `dtc -I dtb -O dts` in
+the other.
 
 The RealView source is stored in its preprocessed form. The file in the kernel
 tree begins with `#include`, and cpp has to run before either tool sees it;

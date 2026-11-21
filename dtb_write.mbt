@@ -112,12 +112,11 @@ fn encode_value(parts : Array[ValuePart], out : Buffer) -> Unit raise DtbError {
               out.write_byte((v & 0xFF).to_byte())
             }
             32UL => put_cell(out, c)
-            _ => {
-              let raw = c.to_int()
-              for shift in [56, 48, 40, 32, 24, 16, 8, 0] {
-                out.write_byte(((raw >> shift) & 0xFF).to_byte())
-              }
-            }
+            // Anything wider than 32 bits: dtc accepts only 64, and the value
+            // is written whole. Converting through `Int` here drops the high
+            // half, which is how `0x1234567890abcdef` came out as
+            // `0x90abcdef90abcdef`.
+            _ => put_u64(out, c)
           }
         }
       Bytes(bs) =>
@@ -234,8 +233,17 @@ pub fn encode_blob(file : SourceFile) -> Bytes raise DtbError {
 ///|
 /// Writes a big-endian 64-bit value.
 fn put_u64(out : Buffer, v : UInt64) -> Unit {
-  let raw = v.to_int()
-  for shift in [56, 48, 40, 32, 24, 16, 8, 0] {
-    out.write_byte(((raw >> shift) & 0xFF).to_byte())
-  }
+  // `UInt64::to_int` truncates by value, not by bit pattern: the high 32 bits
+  // are dropped rather than reinterpreted, so shifting them back out gives the
+  // low half twice. Masking each half and converting separately keeps the bits.
+  let hi = ((v >> 32) & 0xFFFF_FFFFUL).to_int()
+  let lo = (v & 0xFFFF_FFFFUL).to_int()
+  out.write_byte(((hi >> 24) & 0xFF).to_byte())
+  out.write_byte(((hi >> 16) & 0xFF).to_byte())
+  out.write_byte(((hi >> 8) & 0xFF).to_byte())
+  out.write_byte((hi & 0xFF).to_byte())
+  out.write_byte(((lo >> 24) & 0xFF).to_byte())
+  out.write_byte(((lo >> 16) & 0xFF).to_byte())
+  out.write_byte(((lo >> 8) & 0xFF).to_byte())
+  out.write_byte((lo & 0xFF).to_byte())
 }
