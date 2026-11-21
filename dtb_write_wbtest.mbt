@@ -184,7 +184,8 @@ test "realview pb1176: shape" {
 /// `dts_emit` relies on for its own comparison.
 test "encode_tree: round-trips every fixture" {
   let names = [
-    "minimal.dtb", "nested.dtb", "overlay-base.dtb", "overlay-uart.dtbo", "realview-pb1176.dtb",
+    "minimal.dtb", "nested.dtb", "overlay-base.dtb", "overlay-labels.dtb", "overlay-uart.dtbo",
+    "realview-pb1176.dtb",
   ]
   for name in names {
     let blob = fixture_blob(name)
