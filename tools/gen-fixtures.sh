@@ -30,7 +30,7 @@ fi
 
 # Files that need -@ but are not plugins: their labels have to be exported for
 # an overlay to refer to them.
-base_trees="overlay-base"
+base_trees="overlay-base overlay-labels"
 
 compiled=0
 failed=0

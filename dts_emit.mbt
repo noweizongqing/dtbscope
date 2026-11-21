@@ -20,7 +20,8 @@
 pub fn emit_source(tree : Tree) -> String {
   let buf = StringBuilder()
   buf.write_string("/dts-v1/;\n\n")
-  emit_node(tree.root, "", buf)
+  let labels = label_map(tree.root)
+  emit_node(tree.root, "", "/", labels, buf)
   // `emit_node` already ends the root with `};\n`, so nothing is added here.
   // dtc's output ends exactly there, and an extra newline would make the byte
   // comparison fail on the last line alone.
@@ -28,14 +29,66 @@ pub fn emit_source(tree : Tree) -> String {
 }
 
 ///|
+/// Recovers node labels from `/__symbols__`.
+///
+/// A blob does not store labels on the nodes themselves; dtc writes them into
+/// `/__symbols__` as `label = "/path"` entries when the source was compiled with
+/// `-@`. Printing them back is what makes the output usable as an overlay
+/// source: without a label there is no `&name` to write a reference with, so a
+/// round trip through decompile would silently produce a tree that can no longer
+/// be patched.
+///
+/// The map is keyed by the node path with a leading `/`, because that is the
+/// form the entry holds. The root's own labels are keyed by `/` alone.
+fn label_map(root : Node) -> Map[String, Array[String]] {
+  let out : Map[String, Array[String]] = Map([])
+  for child in root.children {
+    if child.name != "__symbols__" {
+      continue
+    }
+    for prop in child.properties {
+      // The value is one NUL-terminated string holding the path.
+      let bytes = Bounds::of_bytes(prop.value)
+      let (path, _) = bytes.cstr(0L, bytes.length()) catch { _ => continue }
+      match out.get(path) {
+        Some(names) => names.push(prop.name)
+        None => out.set(path, [prop.name])
+      }
+    }
+  }
+  out
+}
+
+///|
 /// Writes one node and everything under it.
 ///
 /// `indent` is the whitespace prefix for this node's own line; its properties
 /// and children get one more tab.
-fn emit_node(node : Node, indent : String, buf : StringBuilder) -> Unit {
+fn emit_node(
+  node : Node,
+  indent : String,
+  path : String,
+  labels : Map[String, Array[String]],
+  buf : StringBuilder,
+) -> Unit {
   let inner = indent + "\t"
   let name = if node.name == "" { "/" } else { node.name }
-  buf.write_string(indent + name + " {\n")
+  // dtc prints the labels in the reverse of the order `__symbols__` lists them,
+  // which is the reverse of the order they appeared in the source. The map is
+  // built in file order, so this walks backwards.
+  let prefix = match labels.get(path) {
+    Some(names) => {
+      let buf2 = StringBuilder()
+      let mut i = names.length() - 1
+      while i >= 0 {
+        buf2.write_string(names[i] + ": ")
+        i = i - 1
+      }
+      buf2.to_string()
+    }
+    None => ""
+  }
+  buf.write_string(indent + prefix + name + " {\n")
   for prop in node.properties {
     buf.write_string(inner + prop.name)
     let value = render_value(prop.value)
@@ -55,7 +108,12 @@ fn emit_node(node : Node, indent : String, buf : StringBuilder) -> Unit {
         buf.write_string("\n")
       }
       first = false
-      emit_node(child, inner, buf)
+      let child_path = if path == "/" {
+        "/" + child.name
+      } else {
+        path + "/" + child.name
+      }
+      emit_node(child, inner, child_path, labels, buf)
     }
   }
   buf.write_string(indent + "};\n")

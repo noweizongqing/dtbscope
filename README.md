@@ -58,6 +58,7 @@ the same source. Four fixtures:
 | `nested` | 1 086 B | 12 | CPU subtree, phandle, multi-line `reg`, empty `ranges` |
 | `realview-pb1176` | 9 983 B | 69 | ARM board from the Linux tree: aliases, dma-ranges, 14 phandles |
 | `overlay-uart` | 381 B | 4 | `/plugin/` patches, `__fixups__` |
+| `overlay-labels` | 403 B | 3 | three labels on one node, `__symbols__` round trip |
 
 The other direction is checked the same way: `emit_source` on a blob produces
 the text `dtc -I dtb -O dts` prints, byte for byte. That includes the 559-line
@@ -73,11 +74,11 @@ tells them apart.
 
 | Part | Lines |
 |---|---|
-| Library | 4 126 |
-| Tests (`*_wbtest.mbt`) | 1 710 |
+| Library | 4 184 |
+| Tests (`*_wbtest.mbt`) | 1 761 |
 | CLI and browser entry points | 366 |
 
-66 tests. `moon check --deny-warn` and `moon fmt --check` are clean.
+70 tests. `moon check --deny-warn` and `moon fmt --check` are clean.
 
 ## Performance
 

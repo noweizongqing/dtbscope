@@ -1,0 +1,16 @@
+/dts-v1/;
+/ {
+	#address-cells = <1>;
+	#size-cells = <1>;
+
+	soc {
+		compatible = "simple-bus";
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		x: y: z: n1@1000 {
+			reg = <0x1000 0x100>;
+		};
+	};
+};

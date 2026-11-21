@@ -211,3 +211,54 @@ test "trailing newline count matches dtc" {
   // And none at the start beyond the version line's blank separator.
   inspect(mine.has_prefix("/dts-v1/;\n\n/ {\n"), content="true")
 }
+
+///|
+/// A blob built with `-@` carries its labels in `/__symbols__`, and the
+/// emitter has to put them back on the nodes.
+///
+/// Without this, decompiling a base tree drops every label, and the text that
+/// comes out cannot be used to write an overlay: an overlay refers to nodes as
+/// `&name`, and there is no name left to write. The bytes still parse, so the
+/// loss is silent — the tree is right and only the ability to patch it is gone.
+test "labels come back from __symbols__" {
+  let mine = emit_fixture("overlay-base.dtb")
+  inspect(mine.contains("\tintc: interrupt-controller@1000 {"), content="true")
+  inspect(mine.contains("\tuart0: serial@2000 {"), content="true")
+}
+
+///|
+/// Several labels on one node print in the reverse of the order `__symbols__`
+/// lists them, which is what dtc does.
+///
+/// A single label would pass with either order, so this case exists to pin the
+/// direction: `x: y: z: n1` in the source becomes `z: y: x: n1` on the way back
+/// out.
+test "multiple labels print in reverse" {
+  let mine = emit_fixture("overlay-labels.dtb")
+  // `x`, `y`, `z` in that source order; `/__symbols__` lists them in that
+  // order; dtc prints them backwards.
+  inspect(mine.contains("\t\tz: y: x: n1@1000 {"), content="true")
+}
+
+///|
+/// The whole multi-label fixture, byte for byte against dtc's dump.
+test "overlay-labels: source identical to dtc dump" {
+  let mine = emit_fixture("overlay-labels.dtb")
+  let want = @fs.read_file_to_string(
+    "internal/fixtures/overlay-labels.expected.dts",
+  )
+  inspect(first_line_difference(mine, want), content="identical")
+}
+
+///|
+/// A blob built without `-@` has no `/__symbols__` and gains no labels.
+///
+/// `/__symbols__` is a real node in the blob, so the emitter would print it if
+/// it were invented or if the label pass ran on the wrong path.
+test "no symbols means no labels" {
+  let src = "/dts-v1/; / { soc { bus { }; }; };"
+  let blob = encode_blob(parse_source(src))
+  let text = emit_source(parse_tree(blob))
+  inspect(text.contains(": bus {"), content="false")
+  inspect(text.contains("__symbols__"), content="false")
+}
