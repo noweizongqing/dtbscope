@@ -177,12 +177,7 @@ fn main {
       println(trimmed)
     }
     CompileOverlay(input~, output~) => {
-      let text = @fs.read_file_to_string(input) catch {
-        _ => {
-          report(input + ": read failed")
-          abort("read failed")
-        }
-      }
+      let text = read_source(input)
       let blob = try {
         let file = @lib.parse_source(text)
         @lib.encode_blob(@lib.build_overlay(file))
@@ -231,12 +226,7 @@ fn main {
       }
     }
     Compile(input~, output~) => {
-      let text = @fs.read_file_to_string(input) catch {
-        _ => {
-          report(input + ": read failed")
-          abort("read failed")
-        }
-      }
+      let text = read_source(input)
       let blob = try {
         let file = @lib.parse_source(text)
         @lib.encode_blob(@lib.resolve_references(file))
@@ -317,4 +307,33 @@ fn usage() -> String {
     #|  -h, --help      print this message
     #|  -V, --version   print the version
   )
+}
+
+///|
+/// Reads a source file and expands its `/include/` directives.
+///
+/// The include is dtc's own, not a preprocessor's, so a source that uses it is
+/// this tool's input rather than something cpp has to run first. Paths resolve
+/// relative to the including file, which is why the reader takes the origin
+/// and the expansion passes it along: a `#include`-style lookup against the
+/// working directory would find a different file depending on where the caller
+/// ran the command.
+fn read_source(path : String) -> String {
+  let text = @fs.read_file_to_string(path) catch {
+    _ => {
+      report(path + ": read failed")
+      abort("read failed")
+    }
+  }
+  @lib.expand_includes(text, path, target => {
+    let loaded = Ok(@fs.read_file_to_string(target)) catch {
+      _ => Err("not found or unreadable")
+    }
+    loaded
+  }) catch {
+    e => {
+      report(path + ": " + e.to_string())
+      abort("include failed")
+    }
+  }
 }

@@ -84,6 +84,9 @@ pub fn build_overlay(file : SourceFile) -> SourceFile raise OverlayError {
       labels: [],
       properties: [target_prop],
       children: [fragment.node],
+      deletes: [],
+      is_delete: false,
+      omit_if_no_ref: false,
     })
     index = index + 1
   }
@@ -96,6 +99,9 @@ pub fn build_overlay(file : SourceFile) -> SourceFile raise OverlayError {
       labels: [],
       properties: file.root.properties,
       children: file.root.children.copy() + fragments,
+      deletes: [],
+      is_delete: false,
+      omit_if_no_ref: false,
     }
   } else {
     file.root
@@ -253,7 +259,15 @@ fn build_fixup_node(fixups : Array[(String, String)]) -> SourceNode {
       None => ()
     }
   }
-  { name: "__fixups__", labels: [], properties, children: [], }
+  {
+    name: "__fixups__",
+    labels: [],
+    properties,
+    children: [],
+    deletes: [],
+    is_delete: false,
+    omit_if_no_ref: false,
+  }
 }
 
 ///|

@@ -150,6 +150,21 @@ pub(all) struct SourceNode {
   properties : Array[SourceProperty]
   /// Children in source order.
   children : Array[SourceNode]
+  /// `/delete-property/` names, applied to this node after its own properties
+  /// are collected.
+  ///
+  /// Kept as a list rather than applied during parsing because the deletion may
+  /// name a property that comes later in the body, which dtc allows: the
+  /// directives are collected and run once the body is closed.
+  deletes : Array[String]
+  /// Whether this node was introduced by `deleted` rather than by a body.
+  ///
+  /// A `/delete-node/` marker carries no properties or children; it exists so
+  /// that the merge pass knows to remove the target instead of adding to it.
+  is_delete : Bool
+  /// For an `/omit-if-no-ref/` node, whether it was marked. The pass that
+  /// assigns phandles drops it when nothing refers to it.
+  omit_if_no_ref : Bool
 }
 
 ///|
@@ -227,8 +242,36 @@ fn not_same_kind(a : TokenKind, b : TokenKind) -> Bool {
     | (Amp, Amp)
     | (Colon, Colon)
     | (Minus, Minus)
+    | (Plus, Plus)
+    | (Star, Star)
+    | (Percent, Percent)
+    | (Tilde, Tilde)
+    | (Bang, Bang)
+    | (Caret, Caret)
+    | (Pipe, Pipe)
+    | (Question, Question)
     | (Eof, Eof) => false
+    // Two operators are the same kind when they are the same operator; the
+    // payload is what distinguishes them, so it is compared rather than
+    // ignored.
+    (RelOp(a), RelOp(b)) => !same_rel_op(a, b)
     _ => true
+  }
+}
+
+///|
+/// Whether two operators are the same one.
+fn same_rel_op(a : RelOp, b : RelOp) -> Bool {
+  match (a, b) {
+    (Less, Less)
+    | (Greater, Greater)
+    | (LessEqual, LessEqual)
+    | (GreaterEqual, GreaterEqual)
+    | (EqualEqual, EqualEqual)
+    | (NotEqual, NotEqual)
+    | (ShiftLeft, ShiftLeft)
+    | (ShiftRight, ShiftRight) => true
+    _ => false
   }
 }
 
@@ -254,6 +297,9 @@ pub fn parse_source(source : String) -> SourceFile raise ParseError {
   let memreserves : Array[(UInt64, UInt64)] = []
   let mut is_plugin = false
   let mut saw_version = false
+  // Patches that follow the root node in this same file. Collected here so
+  // that they outlive the branch that reads them.
+  let patches : Array[Fragment] = []
   while !parser.at_eof() {
     if parser.is_slash_directive("dts-v1") {
       if saw_version {
@@ -302,26 +348,74 @@ pub fn parse_source(source : String) -> SourceFile raise ParseError {
     if !is_plugin {
       raise BadValue(detail="no root node", span=parser.current.span)
     }
-    { name: "", labels: [], properties: [], children: [], }
+    {
+      name: "",
+      labels: [],
+      properties: [],
+      children: [],
+      deletes: [],
+      is_delete: false,
+      omit_if_no_ref: false,
+    }
   } else if parser.starts_fragment() {
     // Every top-level entry is a patch. The root node stays empty; the
     // fragments carry everything the file said.
     while !parser.at_eof() {
       fragments.push(parser.parse_fragment())
     }
-    { name: "", labels: [], properties: [], children: [], }
+    {
+      name: "",
+      labels: [],
+      properties: [],
+      children: [],
+      deletes: [],
+      is_delete: false,
+      omit_if_no_ref: false,
+    }
   } else {
     let node = parser.parse_node("")
-    if !parser.at_eof() {
+    // Everything after the root node is one of three things: another root
+    // block to merge, a `/delete-node/` marker, or a patch. dtc accepts all
+    // three in any order, which is what lets an `/include/` bring in a root
+    // block of its own.
+    let root_deletes : Array[SourceNode] = []
+    let mut current = node
+    while !parser.at_eof() {
+      if parser.is_slash_directive("delete-node") {
+        root_deletes.push(parser.parse_delete_node())
+        continue
+      }
+      // A bare `/` opens another root block. A directive also starts with a
+      // slash, so the word after it decides: `directive_word` returns None for
+      // `/ {`, which is what makes this the root-block branch.
+      if same_kind(parser.current.kind, Slash) &&
+        parser.directive_word() is None {
+        let extra = parser.parse_node("")
+        current = merge_source_node(current, extra)
+        continue
+      }
+      // `&label { ... };` after the root node is a patch, not only a plugin
+      // construct: dtc applies it to the tree it just read, which is how a
+      // board file overrides a node from an included file.
+      if parser.starts_fragment() {
+        patches.push(parser.parse_fragment())
+        continue
+      }
       raise Unexpected(
         token=parser.current.kind,
         expected="end of file after the root node",
         span=parser.current.span,
       )
     }
-    node
+    if root_deletes.length() > 0 {
+      { ..current, children: current.children.copy() + root_deletes, }
+    } else {
+      current
+    }
   }
-  { root, memreserves, is_plugin, fragments, }
+  let resolved = apply_deletions(root)
+  let patched = apply_self_patches(resolved, patches)
+  { root: patched, memreserves, is_plugin, fragments, }
 }
 
 ///|
@@ -405,10 +499,8 @@ fn Parser::parse_node(
   name : String,
 ) -> SourceNode raise ParseError {
   // A node at the top level is written as `/ { ... };` — the name is the
-  // slash itself, which the caller has already consumed for the root.
-  // The root is written `/ { ... };`, so its name is the empty string and the
-  // slash that introduces it is consumed here. Child nodes arrive with their
-  // name already read from the body loop.
+  // slash itself, which the caller has already consumed for the root. Child
+  // nodes arrive with their name already read from the body loop.
   let node_name = if name == "" {
     if same_kind(self.current.kind, Slash) {
       self.advance()
@@ -423,88 +515,10 @@ fn Parser::parse_node(
   } else {
     name
   }
-  self.expect_kind(LBrace, "'{' opening the node body")
-  self.advance()
-  let properties : Array[SourceProperty] = []
-  let children : Array[SourceNode] = []
-  let node_labels : Array[String] = []
-  while !self.at_eof() {
-    if same_kind(self.current.kind, RBrace) {
-      self.advance()
-      // A node definition ends with `};`. The semicolon is required by dtc and
-      // its absence is the most common syntax error in hand-written sources,
-      // so it is reported by name rather than as a brace mismatch.
-      self.expect_kind(Semicolon, "';' after '}'")
-      self.advance()
-      return {
-        name: node_name,
-        labels: node_labels.copy(),
-        properties,
-        children,
-      }
-    }
-    if same_kind(self.current.kind, Slash) {
-      // A directive inside a node body.
-      let directive = self.directive_word()
-      match directive {
-        Some(w) => {
-          if w == "delete-node" ||
-            w == "delete-property" ||
-            w == "omit-if-no-ref" {
-            raise Unsupported(
-              what="\{w} inside a node body",
-              span=self.current.span,
-            )
-          }
-          raise Unexpected(
-            token=self.current.kind,
-            expected="a node, a property, or a directive this version understands",
-            span=self.current.span,
-          )
-        }
-        None =>
-          raise Unexpected(
-            token=self.current.kind,
-            expected="a node or a property",
-            span=self.current.span,
-          )
-      }
-    }
-    let (ident, ident_span) = self.take_ident("a node or property name")
-    // A colon after an identifier binds it as a label for the node that
-    // follows. This is the only place labels are recorded, and they stay in
-    // source order so that phandle assignment is reproducible.
-    if same_kind(self.current.kind, Colon) {
-      self.advance()
-      node_labels.push(ident)
-      ignore(ident_span)
-      continue
-    }
-    if same_kind(self.current.kind, Equals) ||
-      same_kind(self.current.kind, Semicolon) {
-      let prop = self.parse_property(ident, ident_span)
-      properties.push(prop)
-      continue
-    }
-    if same_kind(self.current.kind, LBrace) {
-      // Labels accumulated before the node name belong to this node. They are
-      // attached after parsing so the node is built in one place.
-      let child = self.parse_node(ident)
-      children.push({ ..child, labels: node_labels.copy(), })
-      node_labels.clear()
-      continue
-    }
-    raise Unexpected(
-      token=self.current.kind,
-      expected="'{', '=' or ';' after an identifier",
-      span=self.current.span,
-    )
-  }
-  raise Unexpected(
-    token=self.current.kind,
-    expected="'}' closing the node body",
-    span=self.current.span,
-  )
+  // One body parser for both: a root node and a child node differ only in how
+  // the name was decided, and keeping two copies meant the directives added
+  // below landed in one of them.
+  self.parse_node_body(node_name)
 }
 
 ///|
@@ -677,6 +691,20 @@ fn Parser::parse_cells(self : Parser) -> ValuePart raise ParseError {
         }
         cells.push(n)
         self.advance()
+      }
+      // `( ... )` is an expression, evaluated now and stored as the number it
+      // works out to. dtc does the same: the blob has no trace of it.
+      LParen => {
+        let span = self.current.span
+        let value = self.parse_expression()
+        let masked = mask_to_width(value, 32UL)
+        if masked > 0xFFFF_FFFFUL {
+          raise BadValue(
+            detail="cell value \{masked} does not fit in 32 bits",
+            span~,
+          )
+        }
+        cells.push(masked)
       }
       _ =>
         raise Unexpected(
@@ -881,12 +909,50 @@ fn Parser::parse_node_body(
   let properties : Array[SourceProperty] = []
   let children : Array[SourceNode] = []
   let node_labels : Array[String] = []
+  let deletes : Array[String] = []
+  let mut omit_if_no_ref = false
   while !self.at_eof() {
     if same_kind(self.current.kind, RBrace) {
       self.advance()
       self.expect_kind(Semicolon, "';' after '}'")
       self.advance()
-      return { name, labels: node_labels.copy(), properties, children, }
+      return {
+        name,
+        labels: node_labels.copy(),
+        properties,
+        children,
+        deletes,
+        is_delete: false,
+        omit_if_no_ref,
+      }
+    }
+    // Directives are checked before the identifier rule, because they start
+    // with a slash and would otherwise be read as a node name.
+    if same_kind(self.current.kind, Slash) {
+      match self.directive_word() {
+        Some("delete-node") =>
+          // dtc rejects this placement: properties must precede subnodes, and
+          // the directive counts as a property, so a `/delete-node/` inside a
+          // body is a syntax error there. Accepting it would make a source that
+          // builds here fail in dtc, which is the one thing the comparison
+          // tests exist to prevent.
+          raise Unsupported(
+            what="/delete-node/ inside a node body; dtc allows it only at top level",
+            span=self.current.span,
+          )
+        Some("delete-property") => {
+          deletes.push(self.parse_delete_property())
+          continue
+        }
+        Some("omit-if-no-ref") => {
+          self.eat_directive("omit-if-no-ref")
+          // The marker applies to the node that follows, which the loop reads
+          // on the next pass; the flag is consumed there.
+          omit_if_no_ref = true
+          continue
+        }
+        _ => ()
+      }
     }
     let (ident, ident_span) = self.take_ident("a node or property name")
     if same_kind(self.current.kind, Colon) {
@@ -904,8 +970,9 @@ fn Parser::parse_node_body(
     }
     if same_kind(self.current.kind, LBrace) {
       let child = self.parse_node(ident)
-      children.push({ ..child, labels: node_labels.copy(), })
+      children.push({ ..child, labels: node_labels.copy(), omit_if_no_ref, })
       node_labels.clear()
+      omit_if_no_ref = false
       continue
     }
     raise Unexpected(
@@ -919,4 +986,588 @@ fn Parser::parse_node_body(
     expected="'}' closing the node body",
     span=self.current.span,
   )
+}
+
+// ---------------------------------------------------------------------------
+// Expressions
+//
+// The precedence table is a list of levels from loosest to tightest binding.
+// Each level parses its operands and then loops while the next token is one of
+// its operators, which is what makes `1 + 2 * 3` group the way C does. The
+// alternative — a Pratt parser — needs the same table and an extra
+// bookkeeping field, so the table is written out here as data.
+// ---------------------------------------------------------------------------
+
+///|
+/// Parses `( expr )` and returns the evaluated value.
+///
+/// The parentheses are part of the source rather than of the grammar: dtc only
+/// enters expression mode when it sees `(`, so a bare `1 + 2` outside them is a
+/// syntax error there too.
+fn Parser::parse_expression(self : Parser) -> Int64 raise ParseError {
+  let span = self.current.span
+  self.expect_kind(LParen, "'(' opening an expression")
+  self.advance()
+  let expr = self.parse_ternary()
+  self.expect_kind(RParen, "')' closing the expression")
+  self.advance()
+  eval_expr(expr) catch {
+    e => raise BadValue(detail=expr_error_text(e), span~)
+  }
+}
+
+///|
+/// Renders an `ExprError` for a parse error message.
+fn expr_error_text(e : ExprError) -> String {
+  match e {
+    DivisionByZero => "division by zero in an expression"
+    BadShift(amount~) => "shift by \{amount} is outside 0..63"
+    Overflow(what~) => "arithmetic overflow: \{what}"
+  }
+}
+
+///|
+/// `cond ? yes : no`, right associative.
+fn Parser::parse_ternary(self : Parser) -> Expr raise ParseError {
+  let cond = self.parse_binary(0)
+  if same_kind(self.current.kind, Question) {
+    self.advance()
+    let yes = self.parse_ternary()
+    self.expect_kind(Colon, "':' in a conditional expression")
+    self.advance()
+    let no = self.parse_ternary()
+    return Ternary(cond, yes, no)
+  }
+  cond
+}
+
+///|
+/// The binary levels, loosest first. Each entry lists the operators at that
+/// level; `parse_binary(level)` handles level and everything tighter.
+fn bin_op_for(kind : TokenKind, level : Int32) -> BinOp? {
+  match level {
+    0 =>
+      match kind {
+        Pipe => Some(Or)
+        _ => None
+      }
+    1 =>
+      match kind {
+        Caret => Some(Xor)
+        _ => None
+      }
+    2 =>
+      match kind {
+        Amp => Some(And)
+        _ => None
+      }
+    3 =>
+      match kind {
+        RelOp(EqualEqual) => Some(Eq)
+        RelOp(NotEqual) => Some(Ne)
+        _ => None
+      }
+    4 =>
+      // Bare `<` and `>` arrive as the bracket tokens, because the scanner
+      // cannot tell a comparison from a cell list without context. Inside an
+      // expression the parser has that context, so both spellings map to the
+      // same operator here.
+      match kind {
+        RelOp(Less) => Some(Lt)
+        RelOp(LessEqual) => Some(Le)
+        RelOp(Greater) => Some(Gt)
+        RelOp(GreaterEqual) => Some(Ge)
+        LAngle => Some(Lt)
+        RAngle => Some(Gt)
+        _ => None
+      }
+    5 =>
+      match kind {
+        RelOp(ShiftLeft) => Some(Shl)
+        RelOp(ShiftRight) => Some(Shr)
+        _ => None
+      }
+    6 =>
+      match kind {
+        Plus => Some(Add)
+        Minus => Some(Sub)
+        _ => None
+      }
+    7 =>
+      match kind {
+        Star => Some(Mul)
+        Slash => Some(Div)
+        Percent => Some(Mod)
+        _ => None
+      }
+    _ => None
+  }
+}
+
+///|
+/// Parses one precedence level, recursing into the next tighter one.
+fn Parser::parse_binary(self : Parser, level : Int32) -> Expr raise ParseError {
+  if level > 7 {
+    return self.parse_unary()
+  }
+  let mut left = self.parse_binary(level + 1)
+  while true {
+    let op = bin_op_for(self.current.kind, level)
+    match op {
+      None => break
+      Some(op) => {
+        self.advance()
+        let right = self.parse_binary(level + 1)
+        left = Bin(op, left, right)
+      }
+    }
+  }
+  left
+}
+
+///|
+/// Parses a unary operator or an atom.
+fn Parser::parse_unary(self : Parser) -> Expr raise ParseError {
+  match self.current.kind {
+    Minus => {
+      self.advance()
+      Un(Neg, self.parse_unary())
+    }
+    Tilde => {
+      self.advance()
+      Un(Not, self.parse_unary())
+    }
+    Bang => {
+      self.advance()
+      Un(LogicalNot, self.parse_unary())
+    }
+    LParen => {
+      // A nested group, which is how `((1 + 2) * 3)` is written.
+      self.advance()
+      let inner = self.parse_ternary()
+      self.expect_kind(RParen, "')' closing the group")
+      self.advance()
+      inner
+    }
+    Number(n) => {
+      // The literal is unsigned in the token; the evaluator works signed, and
+      // going through the two halves keeps a full-width hex literal such as
+      // `0xFFFFFFFFFFFFFFFF` as the negative number C would see rather than
+      // truncating it.
+      let hi = ((n >> 32) & 0xFFFF_FFFFUL).to_int()
+      let lo = (n & 0xFFFF_FFFFUL).to_int()
+      let value = (hi.reinterpret_as_uint().to_int64() << 32) |
+        lo.reinterpret_as_uint().to_int64()
+      self.advance()
+      Lit(value)
+    }
+    other =>
+      raise Unexpected(
+        token=other,
+        expected="a number or a unary operator",
+        span=self.current.span,
+      )
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Deletion and omission directives
+//
+// `/delete-node/`, `/delete-property/` and `/omit-if-no-ref/` are part of the
+// DTS grammar rather than of any preprocessor: dtc reads them itself. Two of
+// them are markers that change what a node means, and one removes something
+// the same file declared earlier, so all three are resolved after the source
+// has been read rather than during the scan.
+// ---------------------------------------------------------------------------
+
+///|
+/// Consumes the `/word/` under the cursor, if it is `word`.
+///
+/// The slash, the identifier and the closing slash are three tokens; the
+/// caller has already established that they spell a directive.
+fn Parser::eat_directive(self : Parser, word : String) -> Unit raise ParseError {
+  ignore(word)
+  self.expect_kind(Slash, "'/' opening a directive")
+  self.advance()
+  self.expect_kind(Ident(word), "the directive name")
+  self.advance()
+  self.expect_kind(Slash, "'/' closing the directive")
+  self.advance()
+}
+
+///|
+/// Parses `/delete-node/ <target>;` where the target is a label, a path, or a
+/// bare name.
+///
+/// A bare name is what appears inside a node body, where the parent is already
+/// known; at top level dtc wants `&label` or `&{/path}` because there is no
+/// parent to resolve a bare name against.
+fn Parser::parse_delete_node(self : Parser) -> SourceNode raise ParseError {
+  self.eat_directive("delete-node")
+  let name = match self.current.kind {
+    Amp =>
+      // A reference: reuses the same grammar as a cell value's reference, so
+      // `&label` and `&{/path}` both work.
+      match self.parse_reference() {
+        Ref(label) => "&" + label
+        PathRef(path) => "&{" + path + "}"
+        other => {
+          ignore(other)
+          raise Unexpected(
+            token=self.current.kind,
+            expected="a label or path after /delete-node/",
+            span=self.current.span,
+          )
+        }
+      }
+    other =>
+      // dtc accepts only a reference here: a bare name would be ambiguous with
+      // a node of that name in the same body, and dtc reports it as a duplicate
+      // rather than deleting anything. Matching that keeps a source that
+      // compiles here compiling there.
+      raise Unexpected(
+        token=other,
+        expected="a label or path after /delete-node/",
+        span=self.current.span,
+      )
+  }
+  self.expect_kind(Semicolon, "';' after /delete-node/")
+  self.advance()
+  {
+    name,
+    labels: [],
+    properties: [],
+    children: [],
+    deletes: [],
+    is_delete: true,
+    omit_if_no_ref: false,
+  }
+}
+
+///|
+/// Parses `/delete-property/ <name>;` and returns the name.
+fn Parser::parse_delete_property(self : Parser) -> String raise ParseError {
+  self.eat_directive("delete-property")
+  let (name, _) = self.take_ident("a property name after /delete-property/")
+  self.expect_kind(Semicolon, "';' after /delete-property/")
+  self.advance()
+  name
+}
+
+///|
+/// Applies `/delete-node/` and `/delete-property/` across the whole tree.
+///
+/// Two passes rather than one, because a deletion at the top of a file may
+/// name a label declared at the bottom: collecting the label table first is
+/// what lets the order in the file not matter, which is how kernel sources use
+/// these directives.
+///
+/// A `/delete-node/` whose target does not exist is an error rather than a
+/// no-op. dtc reports it, and silently accepting it would turn a typo into a
+/// tree that builds and is wrong.
+fn apply_deletions(root : SourceNode) -> SourceNode raise ParseError {
+  // The full path, not the last segment: a deletion target is matched against
+  // the path a node sits at, and `d1` alone would never equal `/d1`.
+  let labels = collect_label_paths(root)
+  apply_deletions_in(root, labels, "")
+}
+
+///|
+/// Resolves every deletion marker in the tree to an absolute path, then drops
+/// the nodes those paths name.
+///
+/// Two passes rather than one because a deletion marker sits in the body that
+/// wrote it, while the node it names can be anywhere: `/delete-node/ &{/soc/bus}`
+/// is written at the root and removes a node two levels down. Resolving the
+/// markers first gives a flat set of paths, and the removal walk then only has
+/// to ask whether the path it is standing on is in the set.
+fn apply_deletions_in(
+  node : SourceNode,
+  labels : Map[String, String],
+  path : String,
+) -> SourceNode raise ParseError {
+  let removed : Map[String, Bool] = Map([])
+  collect_delete_paths(node, labels, path, removed)
+  remove_paths(node, removed, path)
+}
+
+///|
+/// Walks the tree turning deletion markers into absolute paths.
+fn collect_delete_paths(
+  node : SourceNode,
+  labels : Map[String, String],
+  path : String,
+  acc : Map[String, Bool],
+) -> Unit raise ParseError {
+  for child in node.children {
+    if !child.is_delete {
+      continue
+    }
+    let target = child.name
+    if target.has_prefix("&{") {
+      acc.set(target[2:target.length() - 1].to_owned(), true)
+    } else if target.has_prefix("&") {
+      let label = target[1:].to_owned()
+      match labels.get(label) {
+        Some(p) => acc.set(p, true)
+        None =>
+          raise BadValue(
+            detail="/delete-node/ names unknown label '\{label}'",
+            span={ line: 1, column: 1, },
+          )
+      }
+    } else {
+      raise BadValue(
+        detail="/delete-node/ needs '&label' or '&{/path}', found '\{target}'",
+        span={ line: 1, column: 1, },
+      )
+    }
+  }
+  for child in node.children {
+    if child.is_delete {
+      continue
+    }
+    let child_path = if path == "" {
+      "/" + child.name
+    } else {
+      path + "/" + child.name
+    }
+    collect_delete_paths(child, labels, child_path, acc)
+  }
+}
+
+///|
+/// Drops the nodes whose path is in `removed`, and applies each node's own
+/// `/delete-property/` list.
+fn remove_paths(
+  node : SourceNode,
+  removed : Map[String, Bool],
+  path : String,
+) -> SourceNode {
+  let properties = if node.deletes.length() == 0 {
+    node.properties
+  } else {
+    let out : Array[SourceProperty] = []
+    for prop in node.properties {
+      let mut dropped = false
+      for name in node.deletes {
+        if prop.name == name {
+          dropped = true
+        }
+      }
+      if !dropped {
+        out.push(prop)
+      }
+    }
+    out
+  }
+  let kept : Array[SourceNode] = []
+  for child in node.children {
+    if child.is_delete {
+      continue
+    }
+    let child_path = if path == "" {
+      "/" + child.name
+    } else {
+      path + "/" + child.name
+    }
+    if removed.get(child_path) is Some(_) {
+      continue
+    }
+    kept.push(remove_paths(child, removed, child_path))
+  }
+  { ..node, properties, children: kept, deletes: [], }
+}
+
+///|
+/// Splits `/a/b/c` into its segments, dropping the empty leading one.
+fn path_segments(path : String) -> Array[String] {
+  let out : Array[String] = []
+  let mut start = 0
+  for i in 0..<path.length() {
+    if path.get_char(i).unwrap() == '/' {
+      if i > start {
+        out.push(path[start:i].to_owned())
+      }
+      start = i + 1
+    }
+  }
+  if path.length() > start {
+    out.push(path[start:].to_owned())
+  }
+  out
+}
+
+///|
+/// Applies `&label { ... }` patches that appeared in the same file as the tree.
+///
+/// A patch modifies a node the file already declared. The merge is the same
+/// one an overlay performs — properties named in the patch replace, children
+/// merge, everything else survives — so it is written here against the source
+/// tree rather than against the binary one, because at this point neither
+/// phandles nor a blob exist yet.
+fn apply_self_patches(
+  root : SourceNode,
+  patches : Array[Fragment],
+) -> SourceNode raise ParseError {
+  let labels = collect_label_paths(root)
+  let mut current = root
+  for patch in patches {
+    let path = match patch.target {
+      Ref(label) =>
+        match labels.get(label) {
+          Some(p) => p
+          None =>
+            raise BadValue(
+              detail="reference to unknown label '\{label}'",
+              span=patch.span,
+            )
+        }
+      PathRef(p) => p
+      _ =>
+        raise BadValue(detail="patch target is not a reference", span={
+          line: 1,
+          column: 1,
+        })
+    }
+    current = merge_source_path(current, path, patch.node)
+  }
+  current
+}
+
+///|
+/// Maps each label to the full path of its node.
+///
+/// The full path is what makes a nested patch work: `&intc` on a node two
+/// levels down has to resolve to `/soc/interrupt-controller@1000`, and
+/// carrying only the last segment would make the walk match the wrong sibling.
+fn collect_label_paths(root : SourceNode) -> Map[String, String] {
+  let acc : Map[String, String] = Map([])
+  walk_label_paths(root, "", acc)
+  acc
+}
+
+///|
+/// Recursive worker for `collect_label_paths`.
+fn walk_label_paths(
+  node : SourceNode,
+  prefix : String,
+  acc : Map[String, String],
+) -> Unit {
+  let here = if node.name == "" { "/" } else { prefix + "/" + node.name }
+  for label in node.labels {
+    acc.set(label, here)
+  }
+  for child in node.children {
+    if !child.is_delete {
+      walk_label_paths(child, if node.name == "" { "" } else { here }, acc)
+    }
+  }
+}
+
+///|
+/// Merges a patch into the node at `path`, returning the new root.
+///
+/// The path is walked segment by segment, so the recursion knows the parent it
+/// is in and can replace the child it names. A path that names nothing is an
+/// error: a patch that silently did nothing would make a board file build and
+/// behave as though the override were absent.
+fn merge_source_path(
+  node : SourceNode,
+  path : String,
+  patch : SourceNode,
+) -> SourceNode raise ParseError {
+  let segments = path_segments(path)
+  merge_at(node, segments, 0, patch, "")
+}
+
+///|
+/// Walks `segments[at..]` looking for the node to merge into.
+fn merge_at(
+  node : SourceNode,
+  segments : Array[String],
+  at : Int32,
+  patch : SourceNode,
+  here : String,
+) -> SourceNode raise ParseError {
+  if at >= segments.length() {
+    return merge_source_node(node, patch)
+  }
+  let wanted = segments[at]
+  let out : Array[SourceNode] = []
+  let mut found = false
+  for child in node.children {
+    if child.name == wanted {
+      let merged = merge_at(child, segments, at + 1, patch, here + "/" + wanted)
+      out.push(merged)
+      found = true
+    } else {
+      out.push(child)
+    }
+  }
+  if !found {
+    raise BadValue(detail="patch target '\{here}/\{wanted}' does not exist", span={
+      line: 1,
+      column: 1,
+    })
+  }
+  { ..node, children: out, }
+}
+
+///|
+/// Merges one patch body into one node.
+///
+/// Properties replace by name, `/delete-property/` removes from the result, and
+/// children merge by name so that a patch touching one property keeps the
+/// node's other children.
+fn merge_source_node(node : SourceNode, patch : SourceNode) -> SourceNode {
+  let properties : Array[SourceProperty] = []
+  for prop in node.properties {
+    let mut replaced = false
+    for deleted in patch.deletes {
+      if prop.name == deleted {
+        replaced = true
+      }
+    }
+    for incoming in patch.properties {
+      if incoming.name == prop.name {
+        replaced = true
+      }
+    }
+    if !replaced {
+      properties.push(prop)
+    }
+  }
+  for incoming in patch.properties {
+    properties.push(incoming)
+  }
+  let children : Array[SourceNode] = node.children.copy()
+  for incoming in patch.children {
+    let mut merged = false
+    for i in 0..<children.length() {
+      if children[i].name == incoming.name && !incoming.is_delete {
+        children[i] = merge_source_node(children[i], incoming)
+        merged = true
+        break
+      }
+    }
+    if !merged {
+      children.push(incoming)
+    }
+  }
+  // A child the patch deleted is dropped after the merge, so that deleting a
+  // node the base declared works even when the patch also touches a sibling.
+  let kept : Array[SourceNode] = []
+  for child in children {
+    let mut deleted = false
+    for incoming in patch.children {
+      if incoming.is_delete && incoming.name == child.name {
+        deleted = true
+      }
+    }
+    if !deleted {
+      kept.push(child)
+    }
+  }
+  { ..node, properties, children: kept, }
 }

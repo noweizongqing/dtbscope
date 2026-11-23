@@ -18,6 +18,12 @@ pub fn encode_blob(SourceFile) -> Bytes raise DtbError
 
 pub fn encode_tree(Tree) -> Bytes
 
+pub fn eval_expr(Expr) -> Int64 raise ExprError
+
+pub fn expand_includes(String, String, (String) -> Result[String, String]) -> String raise IncludeError
+
+pub fn mask_to_width(Int64, UInt64) -> UInt64
+
 pub fn parse_header(Bytes) -> Header raise DtbError
 
 pub fn parse_memreserves(Bytes, Header) -> Array[(UInt64, UInt64)] raise DtbError
@@ -48,6 +54,22 @@ pub(all) suberror DtbError {
 pub fn DtbError::output(Self, &Logger) -> Unit
 pub fn DtbError::to_string(Self) -> String
 pub impl Show for DtbError
+
+pub suberror ExprError {
+  DivisionByZero
+  BadShift(amount~ : Int64)
+  Overflow(what~ : String)
+}
+
+pub suberror IncludeError {
+  Unreadable(path~ : String, detail~ : String)
+  Cycle(path~ : String, chain~ : Array[String])
+  Misplaced(line~ : Int32)
+  TooDeep(limit~ : Int32)
+}
+pub fn IncludeError::output(Self, &Logger) -> Unit
+pub fn IncludeError::to_string(Self) -> String
+pub impl Show for IncludeError
 
 pub(all) suberror LexerError {
   UnexpectedChar(char~ : Char, span~ : Span)
@@ -95,6 +117,25 @@ pub fn ResolveError::to_string(Self) -> String
 pub impl Show for ResolveError
 
 // Types and methods
+pub(all) enum BinOp {
+  Or
+  Xor
+  And
+  Eq
+  Ne
+  Lt
+  Le
+  Gt
+  Ge
+  Shl
+  Shr
+  Add
+  Sub
+  Mul
+  Div
+  Mod
+}
+
 pub(all) struct Bounds {
   bytes : Bytes
   start : Int64
@@ -121,6 +162,13 @@ pub fn Cursor::little(Int64) -> Self
 pub(all) enum Endian {
   Little
   Big
+}
+
+pub(all) enum Expr {
+  Lit(Int64)
+  Bin(BinOp, Expr, Expr)
+  Un(UnOp, Expr)
+  Ternary(Expr, Expr, Expr)
 }
 
 pub(all) struct FixupLocation {
@@ -191,6 +239,18 @@ pub(all) struct Property {
   offset : Int64
 }
 
+pub(all) enum RelOp {
+  Less
+  Greater
+  LessEqual
+  GreaterEqual
+  EqualEqual
+  NotEqual
+  ShiftLeft
+  ShiftRight
+}
+pub impl Show for RelOp
+
 pub(all) struct SourceFile {
   root : SourceNode
   memreserves : Array[(UInt64, UInt64)]
@@ -203,6 +263,9 @@ pub(all) struct SourceNode {
   mut labels : Array[String]
   properties : Array[SourceProperty]
   children : Array[SourceNode]
+  deletes : Array[String]
+  is_delete : Bool
+  omit_if_no_ref : Bool
 }
 
 pub(all) struct SourceProperty {
@@ -257,6 +320,15 @@ pub(all) enum TokenKind {
   Amp
   Colon
   Minus
+  Plus
+  Star
+  Percent
+  Tilde
+  Bang
+  Caret
+  Pipe
+  Question
+  RelOp(RelOp)
   HexByte(Byte)
   Eof
 }
@@ -268,6 +340,12 @@ pub(all) struct Tree {
   root : Node
   warnings : Array[Warning]
   memreserves : Array[(UInt64, UInt64)]
+}
+
+pub(all) enum UnOp {
+  Not
+  LogicalNot
+  Neg
 }
 
 pub(all) struct Value {

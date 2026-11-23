@@ -170,8 +170,77 @@ pub fn resolve_references(file : SourceFile) -> SourceFile raise ResolveError {
       }
     }
   }
-  let root = rewrite_node(file.root, ROOT_PATH, table, assigned)
+  let rewritten = rewrite_node(file.root, ROOT_PATH, table, assigned)
+  // `/omit-if-no-ref/` is applied last: a node marked with it is dropped when
+  // nothing referred to it, and "referred to" is only known once every
+  // reference has been resolved. The order matters: dropping first would
+  // remove nodes whose references had not been counted yet.
+  let referenced : Map[String, Bool] = Map([])
+  collect_referenced_paths(file.root, table, referenced)
+  let root = drop_unreferenced(rewritten, referenced, ROOT_PATH)
   { ..file, root, }
+}
+
+///|
+/// Records the path of every node some property refers to.
+fn collect_referenced_paths(
+  node : SourceNode,
+  table : LabelTable,
+  acc : Map[String, Bool],
+) -> Unit raise ResolveError {
+  // An alias value is a path string rather than a reference in the finished
+  // blob, but it still names the node, and dtc counts it: a node that only an
+  // alias names is not omitted.
+  let in_aliases = node.name == "aliases"
+  for prop in node.properties {
+    collect_parts(prop.value.parts, table, acc, in_aliases)
+  }
+  for child in node.children {
+    collect_referenced_paths(child, table, acc)
+  }
+}
+
+///|
+/// Records the targets of the references in one value.
+fn collect_parts(
+  parts : Array[ValuePart],
+  table : LabelTable,
+  acc : Map[String, Bool],
+  aliases : Bool,
+) -> Unit raise ResolveError {
+  ignore(aliases)
+  for part in parts {
+    match part {
+      Ref(label) =>
+        match table.labels.get(label) {
+          Some(path) => acc.set(path, true)
+          None => raise UnknownLabel(label~)
+        }
+      PathRef(path) => acc.set(path, true)
+      Refs(inner) => collect_parts(inner, table, acc, aliases)
+      _ => ()
+    }
+  }
+}
+
+///|
+/// Drops the nodes marked `/omit-if-no-ref/` that nothing refers to.
+fn drop_unreferenced(
+  node : SourceNode,
+  referenced : Map[String, Bool],
+  path : String,
+) -> SourceNode {
+  let kept : Array[SourceNode] = []
+  for child in node.children {
+    let child_path = join_path(path, child.name)
+    // The root is never omitted: it has no body to carry the marker, and dtc
+    // would have nothing to emit.
+    if child.omit_if_no_ref && referenced.get(child_path) is None {
+      continue
+    }
+    kept.push(drop_unreferenced(child, referenced, child_path))
+  }
+  { ..node, children: kept, }
 }
 
 ///|

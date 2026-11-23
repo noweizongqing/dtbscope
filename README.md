@@ -34,6 +34,12 @@ source.
 | Strings block lookup | done |
 | Nesting limit | done |
 | DTS lexer: identifiers, strings, numbers, comments, cpp markers | done |
+| Expressions `( ... )`: full C operator set and precedence | done |
+| `/include/` with cycle detection and relative paths | done |
+| `/bits/ 8`, `/bits/ 16`, `/bits/ 64` | done |
+| `/delete-node/`, `/delete-property/` | done |
+| `/omit-if-no-ref/` | done |
+| Top-level `&label { }` patches, multiple root blocks | done |
 | DTS parser: nodes, properties, typed values | done |
 | Labels, `&label` and `&{/path}` references | done |
 | `/bits/`, `/memreserve/`, `/plugin/` | done |
@@ -45,7 +51,8 @@ source.
 | Source emitter, byte-identical to dtc's dump | done |
 | Browser demo (JavaScript backend) | done |
 | DTS emitter (tree back to readable source) | done |
-| C preprocessor, `/incbin/` | out of scope |
+| C preprocessor and macros (`#include`, `#define`) | out of scope |
+| `/incbin/` | out of scope |
 
 ### Verified against dtc
 
@@ -75,11 +82,11 @@ tells them apart.
 
 | Part | Lines |
 |---|---|
-| Library | 4 309 |
-| Tests (`*_wbtest.mbt`) | 1 839 |
-| CLI and browser entry points | 366 |
+| Library | 5 625 |
+| Tests (`*_wbtest.mbt`) | 2 099 |
+| CLI and browser entry points | 385 |
 
-74 tests. `moon check --deny-warn` and `moon fmt --check` are clean.
+86 tests. `moon check --deny-warn` and `moon fmt --check` are clean.
 
 ## Performance
 
@@ -202,6 +209,28 @@ expects the same, so the input it takes is what `cpp` produced rather than the
 file as it sits in the tree. `/incbin/` is likewise refused: it would make the
 parse depend on files outside the source, and the resulting bytes depend on
 data the source does not contain.
+
+`/include/` is **not** the preprocessor and is supported. It is part of the DTS
+grammar — dtc reads it itself, without cpp — so a source that uses it is this
+library's input rather than something that has to be expanded beforehand.
+Paths resolve relative to the including file, cycles are detected, and nesting
+is capped at 32 levels. The same goes for the rest of the syntax that a
+preprocessor is not involved in:
+
+| Feature | Behaviour |
+|---|---|
+| `( expr )` | C operators and precedence, evaluated at parse time |
+| `/include/ "file"` | spliced in, relative to the including file, cycles refused |
+| `/delete-node/ &label;` | removes a node; top level only, which is dtc's rule |
+| `/delete-property/ name;` | removes a property inside a patch body |
+| `/omit-if-no-ref/` | drops the node when nothing refers to it |
+| `&label { }` after the root | patches the tree just read |
+| several `/ { };` blocks | merged into one root, which is what an include produces |
+
+The one thing these have in common is that dtc implements each of them and cpp
+implements none. A source that needs none of them is also accepted, so dropping
+an unsupported construct never silently changes what the rest of the file
+means.
 
 ## Acknowledgements
 

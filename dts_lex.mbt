@@ -100,6 +100,28 @@ pub fn Lexer::next(self : Lexer) -> Token raise LexerError {
   // them out of the token set means the parser decides what a leading slash
   // means by looking at what follows it, which is exactly what it has to do
   // for `/delete-node/` and `/omit-if-no-ref/` as well.
+  // Two-character operators are checked before the one-character ones, so that
+  // `<<` does not scan as two `<` tokens, and `!=` not as `!` then `=`.
+  let two = match (c, self.peek(1)) {
+    ('<', '<') => Some(RelOp(ShiftLeft))
+    ('>', '>') => Some(RelOp(ShiftRight))
+    ('<', '=') => Some(RelOp(LessEqual))
+    ('>', '=') => Some(RelOp(GreaterEqual))
+    ('=', '=') => Some(RelOp(EqualEqual))
+    ('!', '=') => Some(RelOp(NotEqual))
+    _ => None
+  }
+  match two {
+    Some(kind) => {
+      self.bump()
+      self.bump()
+      // `>>` leaves the bracket state alone: a cell list never contains a
+      // shift, but the parser only reaches that far inside an expression, and
+      // the state is about `[` rather than `<`.
+      return { kind, span, }
+    }
+    None => ()
+  }
   let punctuation = match c {
     '{' => Some(LBrace)
     '}' => Some(RBrace)
@@ -116,6 +138,14 @@ pub fn Lexer::next(self : Lexer) -> Token raise LexerError {
     '&' => Some(Amp)
     ':' => Some(Colon)
     '-' => Some(Minus)
+    '+' => Some(Plus)
+    '*' => Some(Star)
+    '%' => Some(Percent)
+    '~' => Some(Tilde)
+    '!' => Some(Bang)
+    '^' => Some(Caret)
+    '|' => Some(Pipe)
+    '?' => Some(Question)
     _ => None
   }
   match punctuation {

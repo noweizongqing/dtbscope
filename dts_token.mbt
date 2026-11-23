@@ -32,6 +32,47 @@ pub impl Show for Span with fn output(self, logger) {
 pub extend Span with Show::{to_string, output}
 
 ///|
+/// The relational and shift operators.
+///
+/// `<<` and `>>` are separate from `<` and `>` because a cell list is written
+/// with the single-character forms: `<1 2>` opens and closes a list, and only
+/// inside `( ... )` does `<` compare.
+pub(all) enum RelOp {
+  /// `<`
+  Less
+  /// `>`
+  Greater
+  /// `<=`
+  LessEqual
+  /// `>=`
+  GreaterEqual
+  /// `==`
+  EqualEqual
+  /// `!=`
+  NotEqual
+  /// `<<`
+  ShiftLeft
+  /// `>>`
+  ShiftRight
+}
+
+///|
+/// Renders an operator for error messages.
+pub impl Show for RelOp with fn output(self, logger) {
+  let text = match self {
+    Less => "<"
+    Greater => ">"
+    LessEqual => "<="
+    GreaterEqual => ">="
+    EqualEqual => "=="
+    NotEqual => "!="
+    ShiftLeft => "<<"
+    ShiftRight => ">>"
+  }
+  logger.write_string(text)
+}
+
+///|
 /// The kinds of token the source format needs.
 ///
 /// A label appears before a node rather than inside the value grammar, so it
@@ -74,6 +115,30 @@ pub(all) enum TokenKind {
   Colon
   /// `-`, used by `/delete-property/` style directives and by `/omit-if-no-ref/`
   Minus
+  /// `+`, an arithmetic operator inside `( ... )`
+  Plus
+  /// `*`
+  Star
+  /// `%`
+  Percent
+  /// `~`
+  Tilde
+  /// `!`
+  Bang
+  /// `^`
+  Caret
+  /// `|`
+  Pipe
+  /// `?`
+  Question
+  /// A relational or shift operator, carrying which one.
+  ///
+  /// These are two-character tokens, so the scanner has to look one past the
+  /// first character before it can name them. They only appear inside an
+  /// expression, but the scanner does not know that: `<` is also the angle
+  /// bracket that opens a cell list, and it is the parser's job to tell them
+  /// apart by context.
+  RelOp(RelOp)
   /// A two-digit hex byte from inside a `[...]` byte string.
   ///
   /// The scanner cannot decide what a digit run means without knowing that it
@@ -108,6 +173,15 @@ pub impl Show for TokenKind with fn output(self, logger) {
     Amp => "'&'"
     Colon => "':'"
     Minus => "'-'"
+    Plus => "'+'"
+    Star => "'*'"
+    Percent => "'%'"
+    Tilde => "'~'"
+    Bang => "'!'"
+    Caret => "'^'"
+    Pipe => "'|'"
+    Question => "'?'"
+    RelOp(op) => "'\{op}'"
     HexByte(b) => "byte 0x\{b.to_int()}"
     Eof => "end of input"
   }
