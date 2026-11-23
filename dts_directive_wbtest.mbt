@@ -258,3 +258,33 @@ test "include names the missing file" {
   }
   inspect(out.contains("/a/absent.dtsi"), content="true")
 }
+
+///|
+/// `/delete-property/` inside a node body does nothing, which is what dtc does.
+///
+/// The directive means "remove this from the node I am patching". A body that
+/// declares a property is not patching anything, so there is nothing to
+/// remove. dtc accepts the syntax and ignores it; removing the property here
+/// would make this compiler disagree with dtc on a source both accept.
+test "delete-property in a body is a no-op" {
+  let src =
+    #|/dts-v1/;
+    #|/ { n { a = <1>; b = <2>; /delete-property/ b; }; };
+  let root = tree_of_source(src).root
+  let n = root.children[0]
+  inspect(n.properties.length(), content="2")
+}
+
+///|
+/// In a patch it does remove the property, because there the node is being
+/// modified rather than declared.
+test "delete-property in a patch removes" {
+  let src =
+    #|/dts-v1/;
+    #|/ { k: n { a = <1>; b = <2>; }; };
+    #|&k { /delete-property/ b; };
+  let root = tree_of_source(src).root
+  let n = root.children[0]
+  inspect(n.properties.length(), content="1")
+  inspect(n.properties[0].name, content="a")
+}

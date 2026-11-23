@@ -1,0 +1,15 @@
+/dts-v1/;
+
+/ {
+	#address-cells = <0x01>;
+	#size-cells = <0x01>;
+
+	common {
+		present;
+	};
+
+	serial@1000 {
+		compatible = "ns16550a";
+		status = "okay";
+	};
+};

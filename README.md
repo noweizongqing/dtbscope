@@ -57,7 +57,7 @@ source.
 ### Verified against dtc
 
 Every blob this module writes is compared byte for byte with dtc's output for
-the same source. Six fixtures:
+the same source. Seven fixtures:
 
 | Fixture | Size | Nodes | What it covers |
 |---|---|---|---|
@@ -66,6 +66,7 @@ the same source. Six fixtures:
 | `overlay-base` | 657 B | 5 | base tree built with `-@`: `__symbols__`, a phandle |
 | `overlay-labels` | 403 B | 4 | three labels on one node, label order on the way back out |
 | `overlay-uart` | 381 B | 4 | `/plugin/` patches, `__fixups__` |
+| `language` | 249 B | 3 | composes nine constructs at once: include, patch, delete-property, delete-node, expression, label, unit address, boolean, text |
 | `realview-pb1176` | 9 983 B | 69 | ARM board from the Linux tree: aliases, dma-ranges, 14 phandles |
 
 The other direction is checked the same way: `emit_source` on a blob produces
@@ -82,11 +83,11 @@ tells them apart.
 
 | Part | Lines |
 |---|---|
-| Library | 5 625 |
-| Tests (`*_wbtest.mbt`) | 2 099 |
+| Library | 5 615 |
+| Tests (`*_wbtest.mbt`) | 2 159 |
 | CLI and browser entry points | 385 |
 
-86 tests. `moon check --deny-warn` and `moon fmt --check` are clean.
+90 tests. `moon check --deny-warn` and `moon fmt --check` are clean.
 
 ## Performance
 

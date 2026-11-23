@@ -1,0 +1,24 @@
+/dts-v1/;
+/include/ "language.dtsi"
+
+/ {
+	#address-cells = <1>;
+	#size-cells = <1>;
+
+	uart0: serial@1000 {
+		compatible = "ns16550a";
+		reg = <0x1000 (0x100 * 2)>;
+		status = "disabled";
+	};
+
+	unused_device: spare@2000 {
+		compatible = "unused";
+	};
+};
+
+&uart0 {
+	status = "okay";
+	/delete-property/ reg;
+};
+
+/delete-node/ &unused_device;

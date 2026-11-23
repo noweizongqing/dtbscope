@@ -1344,23 +1344,13 @@ fn remove_paths(
   removed : Map[String, Bool],
   path : String,
 ) -> SourceNode {
-  let properties = if node.deletes.length() == 0 {
-    node.properties
-  } else {
-    let out : Array[SourceProperty] = []
-    for prop in node.properties {
-      let mut dropped = false
-      for name in node.deletes {
-        if prop.name == name {
-          dropped = true
-        }
-      }
-      if !dropped {
-        out.push(prop)
-      }
-    }
-    out
-  }
+  // `/delete-property/` written directly in a node body has no effect: dtc
+  // accepts the syntax and ignores it, because the directive only means
+  // something against a node the file is patching, and a body that declares a
+  // property is not patching anything. Removing it here would make this
+  // compiler disagree with dtc on a source both accept, which is the one thing
+  // the comparison tests exist to prevent.
+  let properties = node.properties
   let kept : Array[SourceNode] = []
   for child in node.children {
     if child.is_delete {

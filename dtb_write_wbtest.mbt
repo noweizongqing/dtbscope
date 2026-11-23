@@ -287,3 +287,33 @@ test "emit_source prints reservations" {
     content="true",
   )
 }
+
+///|
+/// A board source that uses the whole language at once, byte for byte against
+/// dtc.
+///
+/// Every construct in it is covered by its own test above; this fixture exists
+/// to check they compose. It is also the example printed in the submission
+/// document, so the claim that the example compiles is the same assertion.
+///
+/// The fixture reads `language.dtsi` through `/include/`, which means the
+/// encoder path needs the file system: the expansion happens before parsing,
+/// so it is done here the same way the CLI does it.
+test "language fixture: byte-identical to dtc" {
+  let src = @fs.read_file_to_string("internal/fixtures/language.dts")
+  let expanded = expand_includes(src, "internal/fixtures/language.dts", path => {
+    let body = Ok(@fs.read_file_to_string(path)) catch { _ => Err("not found") }
+    body
+  })
+  let mine = encode_blob(resolve_references(parse_source(expanded)))
+  let theirs = fixture_blob("language.dtb")
+  inspect(first_difference(mine, theirs), content="identical")
+}
+
+///|
+/// The same fixture in the other direction: the blob decompiles to dtc's dump.
+test "language fixture: source identical to dtc dump" {
+  let mine = emit_source(parse_tree(fixture_blob("language.dtb")))
+  let want = @fs.read_file_to_string("internal/fixtures/language.expected.dts")
+  inspect(mine, content=want)
+}
