@@ -489,12 +489,18 @@ test "a deleted node does not reach the blob" {
 
 ///|
 /// A reference deletion applies at the point it is read, so a later root block
-/// that re-declares the node revives it with its earlier properties intact.
+/// that re-declares the node revives it — but only with what the second
+/// declaration wrote.
 ///
-/// This is the case that separates "collect the deletions and run them last"
-/// from "apply each as it is read". The first ordering deletes the revival and
-/// leaves nothing; dtc leaves a node with the *new* compatible and the *old*
-/// extra, because the merge into a flagged node clears the flag.
+/// Two separate things are being pinned, and the second is the one that is easy
+/// to get wrong in the generous direction:
+///
+/// * The ordering. Collecting deletions and running them after the file would
+///   delete the revival and leave nothing behind.
+/// * The contents. dtc's `delete_node` marks every property of the target
+///   deleted as well, so `extra` does not come back. A compiler that only
+///   flagged the node would leave both properties and produce a longer
+///   property list than dtc.
 test "a reference deletion can be undone by a later root block" {
   let src =
     #|/dts-v1/;
@@ -509,7 +515,8 @@ test "a reference deletion can be undone by a later root block" {
     inspect(child.children.length(), content="1")
     let revived = child.children[0]
     inspect(revived.name, content="a@1")
-    inspect(revived.properties.length(), content="2")
+    inspect(revived.properties.length(), content="1")
+    inspect(revived.properties[0].name, content="compatible")
     return
   }
   raise Failure("soc is missing")
@@ -529,6 +536,99 @@ test "a reference deletion can be repeated" {
       inspect(child.children.length(), content="0")
       return
     }
+  }
+  raise Failure("soc is missing")
+}
+
+///|
+/// A marker nested inside a named body clears that wrapper's properties, not the
+/// target's, so the target's properties survive its revival.
+///
+/// This is the mirror of the reference-deletion case above and produces the
+/// opposite result, which is why both are tested. `delete_node` acts on the node
+/// the marker lands on — here the `x@1 { }` wrapper a later root block merges in
+/// — and that wrapper has no properties of its own. The node it deletes is the
+/// earlier `x@1`, whose properties were never on the wrapper to begin with.
+test "a marker inside a named body leaves the target's properties alive" {
+  let src =
+    #|/dts-v1/;
+    #|/ { x@1 { compatible = "a"; extra = "keep"; }; };
+    #|/ { x@1 { /delete-node/ x@1; }; };
+    #|/ { x@1 { compatible = "b"; }; };
+  let root = tree_of_source(src).root
+  inspect(root.children.length(), content="1")
+  let node = root.children[0]
+  inspect(node.name, content="x@1")
+  inspect(node.properties.length(), content="2")
+  inspect(node.properties[0].name, content="compatible")
+  inspect(node.properties[1].name, content="extra")
+}
+
+///|
+/// A marker nested inside a named body lets the wrapper's own properties through
+/// as well, not only the target's.
+///
+/// The previous test shows the target keeps its properties. This one shows the
+/// wrapper's survive too, which rules out "the wrapper is stripped and only
+/// happens to look empty": a `wrap = "w";` next to the marker comes out the
+/// other side. dtc 1.8.1 emits all three properties for this source.
+test "a marker inside a named body keeps the wrapper's properties" {
+  let src =
+    #|/dts-v1/;
+    #|/ { x@1 { compatible = "a"; extra = "keep"; }; };
+    #|/ { x@1 { wrap = "w"; /delete-node/ x@1; }; };
+    #|/ { x@1 { compatible = "b"; }; };
+  let root = tree_of_source(src).root
+  inspect(root.children.length(), content="1")
+  let node = root.children[0]
+  inspect(node.properties.length(), content="3")
+  inspect(node.properties[0].name, content="compatible")
+}
+
+///|
+/// A marker acting as a sibling of its target strips the target's properties, so
+/// the revival carries only what the new declaration wrote.
+///
+/// This is the third shape and it agrees with the reference form rather than
+/// with the nested one: the marker is merged into the parent, finds the target
+/// among the parent's children, and deletes its contents. The difference from
+/// `x@1 { /delete-node/ x@1; }` is that the marker is not inside the node it
+/// names, so it actually reaches it.
+test "a sibling marker strips the target's properties" {
+  let src =
+    #|/dts-v1/;
+    #|/ { x@1 { compatible = "a"; extra = "keep"; }; };
+    #|/ { /delete-node/ x@1; };
+    #|/ { x@1 { compatible = "b"; }; };
+  let root = tree_of_source(src).root
+  inspect(root.children.length(), content="1")
+  let node = root.children[0]
+  inspect(node.name, content="x@1")
+  inspect(node.properties.length(), content="1")
+  inspect(node.properties[0].name, content="compatible")
+}
+
+///|
+/// The same shape one level down, where the marker and its target are children
+/// of a named node rather than of the root.
+///
+/// Worth its own test because the root and a nested node reach the merge by
+/// different paths: the root's children come from the top-level scan, a named
+/// node's from the recursive merge. Both must reach the same rule.
+test "a nested sibling marker strips the target's properties" {
+  let src =
+    #|/dts-v1/;
+    #|/ { soc { x@1 { compatible = "a"; extra = "keep"; }; }; };
+    #|/ { soc { /delete-node/ x@1; }; };
+    #|/ { soc { x@1 { compatible = "b"; }; }; };
+  let root = tree_of_source(src).root
+  for child in root.children {
+    if child.name != "soc" {
+      continue
+    }
+    inspect(child.children.length(), content="1")
+    inspect(child.children[0].properties.length(), content="1")
+    return
   }
   raise Failure("soc is missing")
 }

@@ -536,7 +536,7 @@ fn mark_by_path(
       continue
     }
     if last {
-      children.push({ ..child, is_delete: true, })
+      children.push(strip_deleted(child))
     } else {
       children.push(mark_by_path(child, segments, depth + 1))
     }
@@ -1735,7 +1735,11 @@ fn absorb_child(
   if incoming.is_delete {
     for i in 0..<children.length() {
       if children[i].name == incoming.name {
-        children[i] = mark_deleted(children[i])
+        // The marker deletes the *contents* as well as flagging the node, which
+        // is dtc's `delete_node` reached through `delete_node_by_name`. This is
+        // the case where the marker is a sibling of its target: the parent
+        // being merged into holds the target, and the target loses everything.
+        children[i] = strip_deleted(children[i])
         break
       }
     }
@@ -1754,12 +1758,19 @@ fn absorb_child(
 }
 
 ///|
-/// Marks a node as deleted without removing it from the list.
+/// Flags a node as deleted and strips everything it held.
 ///
-/// The distinction matters: a deletion marker is not a request to forget the
-/// node, it is a flag that the writer pass skips. Leaving the node in place is
-/// what lets a later declaration of the same name merge into it and revive it
-/// with its earlier properties intact.
-fn mark_deleted(node : SourceNode) -> SourceNode {
-  { ..node, is_delete: true, labels: [], }
+/// This is dtc's `delete_node`, which walks the target's children and
+/// properties and marks each one deleted as well. Anything a later declaration
+/// does not restate is therefore gone, which is why a reference deletion that a
+/// later root block revives comes back carrying only the new declaration's
+/// properties.
+///
+/// The node itself stays in the list rather than being unlinked, so a later
+/// declaration of the same name still finds it and merges into it. dtc's
+/// `merge_nodes` clears the flag on the way in, which is what "revives" means.
+fn strip_deleted(node : SourceNode) -> SourceNode {
+  { ..node, is_delete: true, labels: [], properties: [], children: [], }
 }
+
+///|
