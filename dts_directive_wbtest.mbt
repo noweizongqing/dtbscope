@@ -435,22 +435,19 @@ test "re-declaring a deleted node keeps its earlier properties" {
 }
 
 ///|
-/// A duplicate reference deletion is accepted and deletes once: the second
-/// marker finds a node that is already flagged and flags it again.
-test "two markers naming the same node are accepted" {
+/// Deleting the same node twice by reference is an error, not a no-op.
+///
+/// dtc's `get_node_by_ref` skips deleted nodes, so the second marker cannot
+/// find anything and reports "Label or path ... not found". This is the one
+/// place the reference form is *stricter* than the bare-name form, which stays
+/// silent when it finds nothing.
+test "deleting the same node twice by reference is rejected" {
   let src =
     #|/dts-v1/;
     #|/ { soc { a@1 { compatible = "a"; }; }; };
     #|/delete-node/ &{/soc/a@1};
     #|/delete-node/ &{/soc/a@1};
-  let root = tree_of_source(src).root
-  for child in root.children {
-    if child.name == "soc" {
-      inspect(child.children.length(), content="0")
-      return
-    }
-  }
-  raise Failure("soc is missing")
+  inspect(rejects(src), content="true")
 }
 
 ///|
@@ -518,24 +515,6 @@ test "a reference deletion can be undone by a later root block" {
     inspect(revived.properties.length(), content="1")
     inspect(revived.properties[0].name, content="compatible")
     return
-  }
-  raise Failure("soc is missing")
-}
-
-///|
-/// Deleting the same node twice by reference is accepted and deletes once.
-test "a reference deletion can be repeated" {
-  let src =
-    #|/dts-v1/;
-    #|/ { soc { a@1 { compatible = "a"; }; }; };
-    #|/delete-node/ &{/soc/a@1};
-    #|/delete-node/ &{/soc/a@1};
-  let root = tree_of_source(src).root
-  for child in root.children {
-    if child.name == "soc" {
-      inspect(child.children.length(), content="0")
-      return
-    }
   }
   raise Failure("soc is missing")
 }
@@ -631,4 +610,135 @@ test "a nested sibling marker strips the target's properties" {
     return
   }
   raise Failure("soc is missing")
+}
+
+///|
+/// A reference deletion whose path does not resolve is an error, not a silent
+/// no-op.
+///
+/// `&{/b}` inside `/ { a { b { }; }; }` is missing the `a` segment. dtc reports
+/// "Label or path /b not found"; ignoring it would delete nothing and produce a
+/// tree that is quietly wrong.
+test "a path deletion that names nothing is rejected" {
+  let src =
+    #|/dts-v1/;
+    #|/ { a { b { }; }; };
+    #|/delete-node/ &{/b};
+  inspect(rejects(src), content="true")
+}
+
+///|
+/// A patch written before a deletion sees the node the deletion later removes.
+///
+/// dtc applies both in source order, so the patch resolves against a tree that
+/// still has the node. Collecting patches and running them after all deletions
+/// reports an unknown label instead, which is what this pins.
+test "a patch before a deletion resolves against the undeleted tree" {
+  let src =
+    #|/dts-v1/;
+    #|/ { lab: a@1 { }; };
+    #|&lab { patched = <1>; };
+    #|/delete-node/ &{/a@1};
+  let root = tree_of_source(src).root
+  // The node is deleted, so the tree is empty; what matters is that compiling
+  // did not fail on the patch.
+  inspect(root.children.length(), content="0")
+}
+
+///|
+/// A patch written after the same deletion cannot resolve, because the label
+/// went with the node.
+test "a patch after a deletion cannot resolve its label" {
+  let src =
+    #|/dts-v1/;
+    #|/ { lab: a@1 { }; };
+    #|/delete-node/ &{/a@1};
+    #|&lab { patched = <1>; };
+  inspect(rejects(src), content="true")
+}
+
+///|
+/// A plugin with no fragments is rejected.
+///
+/// dtc's grammar is `versioninfo plugindecl memreserves devicetree`: the tree
+/// is required even for a plugin, and a file that stops after `/plugin/;` is a
+/// syntax error. Accepting it would compile a source dtc refuses.
+test "an empty plugin is rejected" {
+  let src =
+    #|/dts-v1/;
+    #|/plugin/;
+  inspect(rejects(src), content="true")
+}
+
+///|
+/// A bare `&label` outside `<...>` becomes the target's path as a string; the
+/// same reference inside `<...>` becomes its phandle.
+///
+/// The two forms look almost identical and produce completely different values,
+/// so a compiler that treats them alike emits a blob with a number where every
+/// consumer expects a path. dtc's grammar distinguishes them as REF_PATH and
+/// REF_PHANDLE, and only the second one takes part in phandle numbering — so a
+/// bare reference must not shift the numbers the phandles get.
+test "a bare reference becomes a path and an angled one becomes a phandle" {
+  let src =
+    #|/dts-v1/;
+    #|/ { n1@200 { }; };
+    #|/ {
+    #|  a = &{/n1@200};
+    #|  b = <&{/n1@200}>;
+    #|};
+  let tree = tree_of_source(src)
+  let root = tree.root
+  let mut path_value = ""
+  let mut cell_value = 0UL
+  for prop in root.properties {
+    let bounds = Bounds::of_bytes(prop.value)
+    if prop.name == "a" {
+      let bytes = prop.value
+      let as_text = StringBuilder()
+      for i in 0..<(bytes.length() - 1) {
+        as_text.write_char(bytes.at(i).to_char())
+      }
+      path_value = as_text.to_string()
+    } else if prop.name == "b" {
+      let (v, _) = bounds.read_u32(Cursor::big(0L))
+      cell_value = v.to_uint64()
+    }
+  }
+  inspect(path_value, content="/n1@200")
+  // A phandle was assigned, so the cell is not zero.
+  inspect(cell_value > 0UL, content="true")
+}
+
+///|
+/// A bare reference keeps its target alive against `/omit-if-no-ref/`.
+///
+/// dtc calls `reference_node` on the target of a path reference for this
+/// reason. Without it, a node that is only ever named in `/aliases` would be
+/// dropped, and a board file that names its UART solely through an alias would
+/// lose the UART. The control case is the same node with no reference at all,
+/// which must disappear; both halves are checked so that "keeps everything"
+/// cannot pass.
+test "a bare reference keeps an omit-if-no-ref node" {
+  let kept =
+    #|/dts-v1/;
+    #|/ {
+    #|  /omit-if-no-ref/ u: uart@1000 { reg = <0x1000 0x100>; };
+    #|};
+    #|/ { aliases { console = &u; }; };
+  let root = tree_of_source(kept).root
+  let mut saw_uart = false
+  for child in root.children {
+    if child.name == "uart@1000" {
+      saw_uart = true
+    }
+  }
+  inspect(saw_uart, content="true")
+
+  let dropped =
+    #|/dts-v1/;
+    #|/ {
+    #|  /omit-if-no-ref/ u: uart@1000 { reg = <0x1000 0x100>; };
+    #|};
+  inspect(tree_of_source(dropped).root.children.length(), content="0")
 }

@@ -217,6 +217,20 @@ fn collect_parts(
           None => raise UnknownLabel(label~)
         }
       PathRef(path) => acc.set(path, true)
+      // A bare reference keeps its target alive against `/omit-if-no-ref/`
+      // even though it produces a path string rather than a phandle. dtc's
+      // `fixup_path_references` calls `reference_node` on the target for
+      // exactly this reason.
+      PathString(label) =>
+        if label.has_prefix("&{") {
+          acc.set(label[2:label.length() - 1].to_owned(), true)
+        } else {
+          let name = label[1:].to_owned()
+          match table.labels.get(name) {
+            Some(path) => acc.set(path, true)
+            None => raise UnknownLabel(label=name)
+          }
+        }
       Refs(inner) => collect_parts(inner, table, acc, aliases)
       _ => ()
     }
@@ -279,6 +293,12 @@ fn collect_order_value(
           None => raise UnknownLabel(label~)
         }
       PathRef(path) => push_unique(order, path)
+      // A bare reference does *not* take part in phandle numbering. It becomes
+      // a path string, and dtc's `fixup_phandle_references` walks only
+      // REF_PHANDLE markers, of which a bare reference has none. The target is
+      // still marked referenced, which matters to `/omit-if-no-ref/`, but that
+      // is handled by the omit pass rather than by the numbering order.
+      PathString(_) => ()
       Refs(inner) => collect_order_value(inner, table, order)
       _ => ()
     }
@@ -367,6 +387,18 @@ fn rewrite_alias_parts(
           None => raise UnknownLabel(label~)
         }
       PathRef(path) => out.push(Text(path))
+      // Already a path string by construction, so the alias and non-alias
+      // rewrites agree on it and this case only needs to resolve the label.
+      PathString(label) =>
+        if label.has_prefix("&{") {
+          out.push(Text(label[2:label.length() - 1].to_owned()))
+        } else {
+          let name = label[1:].to_owned()
+          match table.labels.get(name) {
+            Some(path) => out.push(Text(path))
+            None => raise UnknownLabel(label=name)
+          }
+        }
       Refs(inner) => {
         let flat = rewrite_alias_parts(inner, table)
         for p in flat {
@@ -402,6 +434,20 @@ fn rewrite_parts(
         match assigned.get(path) {
           Some(v) => out.push(Cells([v.reinterpret_as_int().to_uint64()]))
           None => raise UnknownPath(path~)
+        }
+      // A bare `&label` outside `<...>` is a path string, so it resolves to the
+      // target's full path with its NUL, exactly like a string literal. This is
+      // the form `/aliases` uses, and emitting a phandle here would produce a
+      // number where the kernel expects a path.
+      PathString(label) =>
+        if label.has_prefix("&{") {
+          out.push(Text(label[2:label.length() - 1].to_owned()))
+        } else {
+          let name = label[1:].to_owned()
+          match table.labels.get(name) {
+            Some(path) => out.push(Text(path))
+            None => raise UnknownLabel(label=name)
+          }
         }
       Refs(inner) => {
         // An interleaved list collapses into one cell list once every piece

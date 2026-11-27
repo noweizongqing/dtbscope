@@ -131,6 +131,10 @@ fn encode_value(parts : Array[ValuePart], out : Buffer) -> Unit raise DtbError {
         raise Unsupported(
           what="path reference &\{path}, call resolve_references first",
         )
+      PathString(label) =>
+        raise Unsupported(
+          what="reference \{label}, call resolve_references first",
+        )
       Refs(_) => raise Unsupported(what="cell list containing a reference")
     }
   }

@@ -358,6 +358,7 @@ pub(all) enum ValuePart {
   Bytes(Array[Byte])
   Ref(String)
   PathRef(String)
+  PathString(String)
   Refs(Array[ValuePart])
   TypedCells(UInt64, Array[UInt64])
 }

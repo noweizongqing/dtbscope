@@ -119,7 +119,7 @@ fn main {
     e => {
       report("\{e}")
       report(usage())
-      abort("bad arguments")
+      @env.exit(1)
     }
   }
   match mode {
@@ -129,7 +129,7 @@ fn main {
       let blob = @fs.read_file_to_bytes(path) catch {
         _ => {
           report(path + ": read failed")
-          abort("read failed")
+          @env.exit(1)
         }
       }
       let text = dump_blob(blob) catch {
@@ -138,7 +138,7 @@ fn main {
           // as a read failure sends the caller looking at the filesystem when
           // the file is there and the header is wrong.
           report(path + ": " + error_text(e))
-          abort("dump failed")
+          @env.exit(1)
         }
       }
       // `dump_tree` already ends with the newline after the last property, and
@@ -156,13 +156,13 @@ fn main {
       let blob = @fs.read_file_to_bytes(path) catch {
         _ => {
           report(path + ": read failed")
-          abort("read failed")
+          @env.exit(1)
         }
       }
       let text = @lib.emit_source(@lib.parse_tree(blob)) catch {
         e => {
           report(path + ": " + error_text(e))
-          abort("decompile failed")
+          @env.exit(1)
         }
       }
       // `emit_source` already ends with the newline dtc writes after the final
@@ -184,13 +184,13 @@ fn main {
       } catch {
         e => {
           report(input + ": " + error_text(e))
-          abort("compile failed")
+          @env.exit(1)
         }
       }
       @fs.write_bytes_to_file(output, blob) catch {
         _ => {
           report(output + ": write failed")
-          abort("write failed")
+          @env.exit(1)
         }
       }
     }
@@ -198,13 +198,13 @@ fn main {
       let base_blob = @fs.read_file_to_bytes(base) catch {
         _ => {
           report(base + ": read failed")
-          abort("read failed")
+          @env.exit(1)
         }
       }
       let over_blob = @fs.read_file_to_bytes(overlay) catch {
         _ => {
           report(overlay + ": read failed")
-          abort("read failed")
+          @env.exit(1)
         }
       }
       let blob = try {
@@ -215,13 +215,13 @@ fn main {
       } catch {
         e => {
           report(base + ": " + error_text(e))
-          abort("apply failed")
+          @env.exit(1)
         }
       }
       @fs.write_bytes_to_file(output, blob) catch {
         _ => {
           report(output + ": write failed")
-          abort("write failed")
+          @env.exit(1)
         }
       }
     }
@@ -235,13 +235,13 @@ fn main {
           // The message has to say what went wrong; a generic "failed" here
           // would hide a parse error behind the same text the read path uses.
           report(input + ": " + error_text(e))
-          abort("compile failed")
+          @env.exit(1)
         }
       }
       @fs.write_bytes_to_file(output, blob) catch {
         _ => {
           report(output + ": write failed")
-          abort("write failed")
+          @env.exit(1)
         }
       }
     }
@@ -322,7 +322,7 @@ fn read_source(path : String) -> String {
   let text = @fs.read_file_to_string(path) catch {
     _ => {
       report(path + ": read failed")
-      abort("read failed")
+      @env.exit(1)
     }
   }
   @lib.expand_includes(text, path, target => {
@@ -333,7 +333,7 @@ fn read_source(path : String) -> String {
   }) catch {
     e => {
       report(path + ": " + e.to_string())
-      abort("include failed")
+      @env.exit(1)
     }
   }
 }

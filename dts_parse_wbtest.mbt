@@ -43,6 +43,7 @@ fn show_part(part : ValuePart) -> String {
     Bytes(bs) => "[" + join_bytes(bs) + "]"
     Ref(l) => "&" + l
     PathRef(p) => "&{" + p + "}"
+    PathString(l) => l
     Refs(inner) => {
       // Rendered as `<` and `>` around the pieces so that a mixed cell list
       // reads the same as a plain one in an assertion.

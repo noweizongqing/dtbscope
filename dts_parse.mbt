@@ -29,6 +29,14 @@ pub(all) enum ValuePart {
   Ref(String)
   /// `&{/path/to/node}`, an explicit path reference.
   PathRef(String)
+  /// A reference written outside `<...>`, as in `aliases { x = &uart0; };`.
+  ///
+  /// This is a different construct from `Ref`, not a variation of it: dtc's
+  /// grammar turns a bare `dt_ref` into a REF_PATH marker and a `<&label>` into
+  /// a REF_PHANDLE one. The first becomes the target's path as a string, the
+  /// second its 32-bit phandle. Emitting a phandle for the bare form produces a
+  /// blob with a number where a path belongs, which no consumer can use.
+  PathString(String)
   /// A cell list with references mixed in, which can only be flattened once
   /// phandles exist.
   Refs(Array[ValuePart])
@@ -345,18 +353,12 @@ pub fn parse_source(source : String) -> SourceFile raise ParseError {
   // node.
   let fragments : Array[Fragment] = []
   let root : SourceNode = if parser.at_eof() {
-    if !is_plugin {
-      raise BadValue(detail="no root node", span=parser.current.span)
-    }
-    {
-      name: "",
-      labels: [],
-      properties: [],
-      children: [],
-      deletes: [],
-      is_delete: false,
-      omit_if_no_ref: false,
-    }
+    // A plugin still needs at least a trailing `;` after `/plugin/` — dtc's
+    // grammar is `versioninfo plugindecl memreserves devicetree`, and a file
+    // that stops before the devicetree is a syntax error there. Accepting an
+    // empty plugin here would compile a source dtc refuses, which is the one
+    // thing the comparison tests exist to prevent.
+    raise BadValue(detail="no root node", span=parser.current.span)
   } else if parser.starts_fragment() {
     // Every top-level entry is a patch. The root node stays empty; the
     // fragments carry everything the file said.
@@ -402,8 +404,14 @@ pub fn parse_source(source : String) -> SourceFile raise ParseError {
       // `&label { ... };` after the root node is a patch, not only a plugin
       // construct: dtc applies it to the tree it just read, which is how a
       // board file overrides a node from an included file.
+      //
+      // Applied here rather than collected, because dtc's grammar action runs
+      // the merge the moment it reduces: a patch written before a
+      // `/delete-node/` sees the node, and one written after it does not. That
+      // ordering is observable — the patch either succeeds or reports an
+      // unknown label.
       if parser.starts_fragment() {
-        patches.push(parser.parse_fragment())
+        current = apply_patch_now(current, parser.parse_fragment())
         continue
       }
       raise Unexpected(
@@ -415,6 +423,9 @@ pub fn parse_source(source : String) -> SourceFile raise ParseError {
     current
   }
   let resolved = apply_deletions(root)
+  // `patches` is empty for a plain source now that each patch is applied as it
+  // is read. It is non-empty only for a plugin, whose fragments are the output
+  // rather than edits to a tree.
   let patched = apply_self_patches(resolved, patches)
   // Two children of one node sharing a name is an error, and the check belongs
   // here rather than in the parser: dtc runs it over the finished tree and
@@ -512,36 +523,62 @@ fn apply_reference_deletion(
       column: 1,
     })
   }
-  mark_by_path(root, segments, 0)
+  // An unknown label and a label whose path does not resolve are separate
+  // failures in dtc, and a path that names nothing must not be a silent no-op:
+  // `&{/b}` inside `/ { a { b { }; }; }` is missing the `a` segment, and dtc
+  // says so rather than deleting nothing.
+  match mark_by_path(root, segments, 0) {
+    Some(next) => next
+    None =>
+      raise BadValue(detail="/delete-node/ names unknown path '\{path}'", span={
+        line: 1,
+        column: 1,
+      })
+  }
 }
 
 ///|
 /// Flags the node at `segments` as deleted, leaving it in place.
 ///
-/// Returns the tree unchanged when the path does not resolve. The caller has
-/// already rejected an unknown label; a label that resolves to a path whose
-/// node has since been deleted is the same case as a marker naming a sibling
-/// that is not there, and dtc treats both as a no-op.
+/// Returns `None` when the path does not resolve, so the caller can report it.
+/// The reference form rejects an unknown target; that is the difference from the
+/// bare-name form, which is a silent no-op when it finds nothing.
 fn mark_by_path(
   node : SourceNode,
   segments : Array[String],
   depth : Int32,
-) -> SourceNode {
+) -> SourceNode? {
   let want = segments[depth]
   let last = depth == segments.length() - 1
   let children : Array[SourceNode] = []
+  let mut matched = false
+  let mut resolved = false
   for child in node.children {
     if child.is_delete || child.name != want {
       children.push(child)
       continue
     }
+    matched = true
     if last {
       children.push(strip_deleted(child))
+      resolved = true
     } else {
-      children.push(mark_by_path(child, segments, depth + 1))
+      // The segment matched but the rest of the path may still not exist, which
+      // is a different failure from "this segment is not here" and is reported
+      // the same way: the path as a whole does not resolve.
+      match mark_by_path(child, segments, depth + 1) {
+        Some(deeper) => {
+          children.push(deeper)
+          resolved = true
+        }
+        None => children.push(child)
+      }
     }
   }
-  { ..node, children, }
+  if !matched || !resolved {
+    return None
+  }
+  Some({ ..node, children, })
 }
 
 ///|
@@ -759,7 +796,15 @@ fn Parser::parse_plain_part(self : Parser) -> ValuePart raise ParseError {
     }
     LAngle => self.parse_cells()
     LBracket => self.parse_byte_string()
-    Amp => self.parse_reference()
+    Amp =>
+      // A bare reference outside `<...>` is a path string, not a phandle. The
+      // two forms look alike and produce completely different values, so the
+      // distinction is made here, where the surrounding syntax is still known.
+      match self.parse_reference() {
+        Ref(label) => PathString("&" + label)
+        PathRef(path) => PathString("&{" + path + "}")
+        other => other
+      }
     Number(_) =>
       // A bare number outside `<...>` is not legal DTS. Reporting it as such is
       // more useful than letting the encoder produce an empty value.
@@ -1580,6 +1625,39 @@ fn apply_self_patches(
     current = merge_source_path(current, path, patch.node)
   }
   current
+}
+
+///|
+/// Applies one `&label { ... };` patch to the tree built so far.
+///
+/// The label table is rebuilt from the current tree on every call, so a label
+/// on a node a previous patch added is visible, and a label on a node a
+/// previous deletion removed is not. Rebuilding is O(nodes) per patch; a
+/// device tree has thousands of nodes and a file has a handful of patches, so
+/// the cost is irrelevant next to getting the ordering right.
+fn apply_patch_now(
+  root : SourceNode,
+  patch : Fragment,
+) -> SourceNode raise ParseError {
+  let labels = collect_label_paths(root)
+  let path = match patch.target {
+    Ref(label) =>
+      match labels.get(label) {
+        Some(p) => p
+        None =>
+          raise BadValue(
+            detail="reference to unknown label '\{label}'",
+            span=patch.span,
+          )
+      }
+    PathRef(p) => p
+    _ =>
+      raise BadValue(detail="patch target is not a reference", span={
+        line: 1,
+        column: 1,
+      })
+  }
+  merge_source_path(root, path, patch.node)
 }
 
 ///|
