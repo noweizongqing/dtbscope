@@ -172,6 +172,12 @@ fn write_node(
     align_buffer(out)
   }
   for child in node.children {
+    // A deleted node stays in the tree so that the duplicate-name check can see
+    // it, but it is not part of the blob. dtc's `flattree.c` returns early on
+    // `tree->deleted` at exactly this point.
+    if child.is_delete {
+      continue
+    }
     write_node(child, strings, out)
   }
   put_u32(out, 0x2)

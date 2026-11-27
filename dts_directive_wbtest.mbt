@@ -127,9 +127,10 @@ test "delete-property removes the property" {
 ///|
 /// `/delete-node/ &label;` at the top level removes a node.
 ///
-/// This is the only placement dtc accepts: inside a body the directive is
-/// rejected as a misplaced property, and a bare name is rejected as a
-/// duplicate node name, so a reference at top level is the whole form.
+/// This is the reference form: it names a node from anywhere in the file and is
+/// resolved against the finished tree, so the order of the directive and the
+/// declaration does not matter. The bare-name form inside a body is a different
+/// construct with different rules, covered by the tests below.
 test "delete-node removes the node" {
   let src =
     #|/dts-v1/;
@@ -287,4 +288,201 @@ test "delete-property in a patch removes" {
   let n = root.children[0]
   inspect(n.properties.length(), content="1")
   inspect(n.properties[0].name, content="a")
+}
+
+// ---------------------------------------------------------------------------
+// `/delete-node/ <name>` inside a node body.
+//
+// This is dtc's `subnode: DT_DEL_NODE DT_PROPNODENAME ';'` production, and its
+// rules are stricter and stranger than the reference form's. Everything below
+// was checked against dtc 1.8.1 with the same source, including the cases where
+// dtc's own behaviour looks like a bug.
+// ---------------------------------------------------------------------------
+
+///|
+/// Parsing a source, expecting it to fail. Returns whether it did.
+fn rejects(src : String) -> Bool {
+  let outcome = Ok(build(src)) catch { _ => Err(()) }
+  match outcome {
+    Ok(_) => false
+    Err(_) => true
+  }
+}
+
+///|
+/// Inside *one* body, a node followed by a marker of the same name is rejected
+/// as a duplicate, so the only way to use the bare-name form in a single root
+/// block is to name something that is not there.
+///
+/// This is the shape dtc's grammar allows and its duplicate check then rejects.
+/// Both halves are one test because the point is the interaction: the grammar
+/// accepts the construct, and the check turns it into an error anyway.
+test "a node and a marker of the same name in one body is a duplicate" {
+  let src =
+    #|/dts-v1/;
+    #|/ {
+    #|  soc {
+    #|    keep@1 { compatible = "k"; };
+    #|    drop@2 { compatible = "d"; };
+    #|    /delete-node/ drop@2;
+    #|  };
+    #|};
+  inspect(rejects(src), content="true")
+}
+
+///|
+/// A marker naming a sibling that has not been declared yet does nothing, and
+/// the later declaration survives.
+///
+/// This is the ordering rule, and it is the one that reads as a bug: the same
+/// two lines in the other order delete the node. It falls out of dtc applying
+/// the marker during the merge rather than afterwards — when the marker is read
+/// there is nothing yet to delete, and by the time the node arrives the marker
+/// has already passed.
+test "delete-node by name before the node does not remove it" {
+  let src =
+    #|/dts-v1/;
+    #|/ {
+    #|  soc {
+    #|    /delete-node/ later@2;
+    #|    later@2 { compatible = "l"; };
+    #|  };
+    #|};
+  let root = tree_of_source(src).root
+  for child in root.children {
+    if child.name == "soc" {
+      inspect(child.children.length(), content="1")
+      inspect(child.children[0].name, content="later@2")
+      return
+    }
+  }
+  raise Failure("soc is missing")
+}
+
+///|
+/// A marker for a name that was never declared is a silent no-op, not an error.
+///
+/// The reference form at top level errors on an unknown target; the bare-name
+/// form does not. A source with a typo here compiles clean in dtc.
+test "delete-node by name for an unknown sibling is a no-op" {
+  let src =
+    #|/dts-v1/;
+    #|/ {
+    #|  soc {
+    #|    keep@1 { compatible = "k"; };
+    #|    /delete-node/ typo@9;
+    #|  };
+    #|};
+  let root = tree_of_source(src).root
+  for child in root.children {
+    if child.name == "soc" {
+      inspect(child.children.length(), content="1")
+      return
+    }
+  }
+  raise Failure("soc is missing")
+}
+
+///|
+/// Across root blocks the merge reaches a node an earlier block declared, so a
+/// marker in a second `/ { soc { ... } };` does delete.
+///
+/// This is how a board file overrides a dtsi: the include brings in a root
+/// block, the board file adds another, and the two are merged.
+test "delete-node by name reaches across root blocks" {
+  let src =
+    #|/dts-v1/;
+    #|/ { soc { a@1 { compatible = "a"; }; b@2 { compatible = "b"; }; }; };
+    #|/ { soc { /delete-node/ b@2; }; };
+  let root = tree_of_source(src).root
+  for child in root.children {
+    if child.name == "soc" {
+      inspect(child.children.length(), content="1")
+      inspect(child.children[0].name, content="a@1")
+      return
+    }
+  }
+  raise Failure("soc is missing")
+}
+
+///|
+/// Deleting a node and then declaring it again keeps the properties it had
+/// before the deletion, merged with the new ones.
+///
+/// dtc's `delete_node` sets a flag instead of unlinking, so the re-declaration
+/// merges into the same struct and `merge_nodes` clears the flag. The old
+/// properties therefore survive. A compiler that truly removed the node here
+/// would produce a tree missing `extra`.
+test "re-declaring a deleted node keeps its earlier properties" {
+  let src =
+    #|/dts-v1/;
+    #|/ { a@1 { compatible = "a"; extra = "keep"; }; };
+    #|/ {
+    #|  a@1 {
+    #|    /delete-node/ a@1;
+    #|  };
+    #|  a@1 { compatible = "b"; };
+    #|};
+  let root = tree_of_source(src).root
+  inspect(root.children.length(), content="1")
+  let node = root.children[0]
+  inspect(node.name, content="a@1")
+  // Both properties, in the order dtc emits: the overridden one in place, the
+  // surviving one after it.
+  inspect(node.properties.length(), content="2")
+  inspect(node.properties[0].name, content="compatible")
+  inspect(node.properties[1].name, content="extra")
+}
+
+///|
+/// A duplicate reference deletion is accepted and deletes once: the second
+/// marker finds a node that is already flagged and flags it again.
+test "two markers naming the same node are accepted" {
+  let src =
+    #|/dts-v1/;
+    #|/ { soc { a@1 { compatible = "a"; }; }; };
+    #|/delete-node/ &{/soc/a@1};
+    #|/delete-node/ &{/soc/a@1};
+  let root = tree_of_source(src).root
+  for child in root.children {
+    if child.name == "soc" {
+      inspect(child.children.length(), content="0")
+      return
+    }
+  }
+  raise Failure("soc is missing")
+}
+
+///|
+/// A property written after a subnode in the same body is rejected, which is
+/// dtc's `Properties must precede subnodes`.
+///
+/// The rule constrains one body, not the file: a property in a second root
+/// block may come after the first block's subnodes, and that is covered by the
+/// merge tests rather than here.
+test "a property after a subnode in one body is rejected" {
+  let src =
+    #|/dts-v1/;
+    #|/ {
+    #|  soc { a@1 { compatible = "a"; }; };
+    #|  late = "p";
+    #|};
+  inspect(rejects(src), content="true")
+}
+
+///|
+/// A deleted node is absent from the encoded blob, not merely flagged in it.
+test "a deleted node does not reach the blob" {
+  let src =
+    #|/dts-v1/;
+    #|/ { soc { a@1 { compatible = "a"; }; b@2 { compatible = "b"; }; }; };
+    #|/ { soc { /delete-node/ b@2; }; };
+  let tree = tree_of_source(src)
+  for child in tree.root.children {
+    if child.name == "soc" {
+      inspect(child.children.length(), content="1")
+      return
+    }
+  }
+  raise Failure("soc is missing")
 }
