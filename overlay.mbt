@@ -601,8 +601,19 @@ fn set_child(
 ///|
 /// Merges one node's properties and children into another.
 fn merge_node(base : Node, body : Node) -> Node {
-  let properties = base.properties.copy()
+  let mut properties = base.properties.copy()
   for prop in body.properties {
+    // A property the base already has is replaced where it stands, and a new
+    // one is inserted at the *front* of the list. That is what libfdt does:
+    // `fdt_setprop` resizes in place when the name exists and otherwise calls
+    // `fdt_add_property_`, which splices the new FDT_PROP tag at
+    // `fdt_check_node_offset_` — the position of the first property.
+    //
+    // The consequence is visible: an overlay that adds three properties puts
+    // them in reverse order ahead of everything the base declared. Appending
+    // them at the end instead produces the same set of properties in a
+    // different order, which is a different blob and a different `dtc -O dts`
+    // dump.
     let replaced : Array[Property] = []
     let mut hit = false
     for existing in properties {
@@ -614,12 +625,9 @@ fn merge_node(base : Node, body : Node) -> Node {
       }
     }
     if hit {
-      properties.clear()
-      for p in replaced {
-        properties.push(p)
-      }
+      properties = replaced
     } else {
-      properties.push(prop)
+      properties = [prop] + properties
     }
   }
   let children = base.children.copy()

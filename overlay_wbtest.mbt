@@ -183,3 +183,35 @@ test "base without symbols is rejected" {
     content="base tree has no /__symbols__; build it with -@ to export its labels",
   )
 }
+
+///|
+/// An overlay's properties are merged the way libfdt merges them: one the base
+/// already has is replaced where it stands, and a new one is inserted ahead of
+/// everything the base declared.
+///
+/// This is not a cosmetic ordering choice. `fdt_setprop` resizes in place on a
+/// name it finds and otherwise calls `fdt_add_property_`, which splices the new
+/// property tag at the position of the node's first property. Appending new
+/// properties to the end instead produces the same set of properties in a
+/// different order — a different blob, with a different struct block and a
+/// different strings block.
+test "overlay properties are inserted ahead of the base's" {
+  let merged = apply_fixtures()
+  let uart = node_at(merged, "/soc/serial@2000")
+  // The base declared `compatible`, `reg`, `status`. `status` is replaced in
+  // place; the two properties the overlay adds go in front of all three.
+  let names : Array[String] = []
+  for prop in uart.properties {
+    names.push(prop.name)
+  }
+  // `interrupts` and `interrupt-parent` come from the overlay in that source
+  // order, so the insert puts the last one it reads at the very front.
+  inspect(names.length(), content="7")
+  // The overlay's source order is status, clock-frequency, interrupt-parent,
+  // interrupts. Each new one is inserted at the front, so the last one read
+  // ends up first and the order comes out reversed ahead of the base.
+  inspect(names[0], content="interrupts")
+  inspect(names[1], content="interrupt-parent")
+  inspect(names[2], content="clock-frequency")
+  inspect(names[3], content="compatible")
+}
