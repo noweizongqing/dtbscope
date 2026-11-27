@@ -486,3 +486,49 @@ test "a deleted node does not reach the blob" {
   }
   raise Failure("soc is missing")
 }
+
+///|
+/// A reference deletion applies at the point it is read, so a later root block
+/// that re-declares the node revives it with its earlier properties intact.
+///
+/// This is the case that separates "collect the deletions and run them last"
+/// from "apply each as it is read". The first ordering deletes the revival and
+/// leaves nothing; dtc leaves a node with the *new* compatible and the *old*
+/// extra, because the merge into a flagged node clears the flag.
+test "a reference deletion can be undone by a later root block" {
+  let src =
+    #|/dts-v1/;
+    #|/ { soc { a@1 { compatible = "a"; extra = "kept"; }; }; };
+    #|/delete-node/ &{/soc/a@1};
+    #|/ { soc { a@1 { compatible = "b"; }; }; };
+  let root = tree_of_source(src).root
+  for child in root.children {
+    if child.name != "soc" {
+      continue
+    }
+    inspect(child.children.length(), content="1")
+    let revived = child.children[0]
+    inspect(revived.name, content="a@1")
+    inspect(revived.properties.length(), content="2")
+    return
+  }
+  raise Failure("soc is missing")
+}
+
+///|
+/// Deleting the same node twice by reference is accepted and deletes once.
+test "a reference deletion can be repeated" {
+  let src =
+    #|/dts-v1/;
+    #|/ { soc { a@1 { compatible = "a"; }; }; };
+    #|/delete-node/ &{/soc/a@1};
+    #|/delete-node/ &{/soc/a@1};
+  let root = tree_of_source(src).root
+  for child in root.children {
+    if child.name == "soc" {
+      inspect(child.children.length(), content="0")
+      return
+    }
+  }
+  raise Failure("soc is missing")
+}

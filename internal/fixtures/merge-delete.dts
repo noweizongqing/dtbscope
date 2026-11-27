@@ -1,0 +1,78 @@
+/dts-v1/;
+
+// The two forms of /delete-node/ and the merge rules they depend on.
+//
+// Every construct here was chosen because a plausible implementation gets it
+// wrong: the bare-name form inside a body is applied during the merge rather
+// than afterwards, so it only reaches a sibling that precedes it, and a node
+// deleted and then re-declared keeps its earlier properties because deletion
+// flags rather than unlinks.
+
+/ {
+	#address-cells = <1>;
+	#size-cells = <1>;
+	compatible = "example,merge-delete";
+
+	soc {
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		uart0: serial@1000 {
+			compatible = "ns16550a";
+			reg = <0x1000 0x100>;
+			status = "disabled";
+		};
+
+		spi@2000 {
+			compatible = "example,spi";
+			reg = <0x2000 0x100>;
+		};
+
+		keep@3000 {
+			compatible = "example,keep";
+			reg = <0x3000 0x100>;
+		};
+	};
+};
+
+// A second root block merges into the first, which is what an /include/
+// bringing in a fragment produces. The marker below does delete here, because
+// the merge reaches the node the first block declared.
+/ {
+	soc {
+		/delete-node/ spi@2000;
+
+		// Declared after the marker above and keeping its name, to pin the
+		// ordering rule: this one is untouched.
+		late@4000 {
+			compatible = "example,late";
+			reg = <0x4000 0x100>;
+		};
+
+		/delete-node/ never@5000;
+	};
+};
+
+// The reference form, resolved against the finished tree.
+&uart0 {
+	status = "okay";
+};
+
+// A node deleted and then re-declared: the properties from the first
+// declaration survive because deletion is a flag, not a removal.
+/ {
+	revived {
+		compatible = "example,first";
+		extra = "kept";
+	};
+};
+
+/ {
+	revived {
+		/delete-node/ revived;
+	};
+
+	revived {
+		compatible = "example,second";
+	};
+};

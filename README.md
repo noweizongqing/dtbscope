@@ -66,7 +66,7 @@ the same source. Seven fixtures:
 | `overlay-base` | 657 B | 5 | base tree built with `-@`: `__symbols__`, a phandle |
 | `overlay-labels` | 403 B | 4 | three labels on one node, label order on the way back out |
 | `overlay-uart` | 381 B | 4 | `/plugin/` patches, `__fixups__` |
-| `language` | 249 B | 3 | composes nine constructs at once: include, patch, delete-property, delete-node, expression, label, unit address, boolean, text |
+| `language` | 249 B | 3 | composes nine constructs at once: include, patch, delete-property, delete-node by reference, expression, label, unit address, boolean, text |
 | `realview-pb1176` | 9 983 B | 69 | ARM board from the Linux tree: aliases, dma-ranges, 14 phandles |
 
 The other direction is checked the same way: `emit_source` on a blob produces
@@ -222,7 +222,8 @@ preprocessor is not involved in:
 |---|---|
 | `( expr )` | C operators and precedence, evaluated at parse time |
 | `/include/ "file"` | spliced in, relative to the including file, cycles refused |
-| `/delete-node/ &label;` | removes a node; top level only, which is dtc's rule |
+| `/delete-node/ &label;` | top-level form: names a node from anywhere, resolved against the finished tree |
+| `/delete-node/ name;` | in-body form: removes the sibling already merged, not one declared later |
 | `/delete-property/ name;` | removes a property inside a patch body |
 | `/omit-if-no-ref/` | drops the node when nothing refers to it |
 | `&label { }` after the root | patches the tree just read |
@@ -232,6 +233,42 @@ The one thing these have in common is that dtc implements each of them and cpp
 implements none. A source that needs none of them is also accepted, so dropping
 an unsupported construct never silently changes what the rest of the file
 means.
+
+### The two forms of `/delete-node/`
+
+They are separate constructs with separate rules, and the difference is not
+cosmetic.
+
+`/delete-node/ &label;` or `/delete-node/ &{/path};` names a node from anywhere
+in the file. The label table is built first, so the directive may appear before
+the node it names. An unknown target is an error.
+
+`/delete-node/ name;` sits inside a node body and names a **sibling of that
+body**. It is applied while the body is merged, so it reaches a sibling already
+merged and nothing else:
+
+```dts
+soc {
+    a@1 { };                    // merged first
+    /delete-node/ b@2;          // nothing named b@2 yet: no-op
+    b@2 { };                    // survives
+};
+```
+
+Four rules follow from that, and each is easy to get wrong by tidying the
+implementation:
+
+- A node deleted and then re-declared keeps the properties it had before,
+  because deletion flags the node rather than unlinking it and the
+  re-declaration merges into the same one.
+- A marker for a name that was never declared is a silent no-op.
+- A property may not follow a subnode in the same body, but a marker may.
+- One body cannot declare a node and then mark it: dtc's duplicate check scans
+  the child list with an asymmetry that makes exactly this combination an
+  error, while the same two lines in the other order are fine.
+
+All four are covered by tests whose expected behaviour was read off dtc 1.8.1
+on the same source rather than inferred from the grammar.
 
 ## Acknowledgements
 

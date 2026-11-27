@@ -378,15 +378,16 @@ pub fn parse_source(source : String) -> SourceFile raise ParseError {
     // block to merge, a `/delete-node/` marker, or a patch. dtc accepts all
     // three in any order, which is what lets an `/include/` bring in a root
     // block of its own.
-    let root_deletes : Array[SourceNode] = []
     let mut current = node
     while !parser.at_eof() {
       if parser.is_slash_directive("delete-node") {
-        // A top-level `/delete-node/ &label;` names a node by reference, so it
-        // needs the finished tree and is collected for the pass below. It is
-        // not the same construct as the bare-name form inside a body, which the
-        // merge consumes.
-        root_deletes.push(parser.parse_delete_node())
+        // Applied at the point it is read, not after the file, because a later
+        // root block can revive what this removes: a node deleted here and
+        // re-declared below keeps its earlier properties and reappears in the
+        // output. Collecting these and running them last would delete the
+        // revival instead of the original.
+        let marker = parser.parse_delete_node()
+        current = apply_reference_deletion(current, marker)
         continue
       }
       // A bare `/` opens another root block. A directive also starts with a
@@ -411,11 +412,7 @@ pub fn parse_source(source : String) -> SourceFile raise ParseError {
         span=parser.current.span,
       )
     }
-    if root_deletes.length() > 0 {
-      { ..current, children: current.children.copy() + root_deletes, }
-    } else {
-      current
-    }
+    current
   }
   let resolved = apply_deletions(root)
   let patched = apply_self_patches(resolved, patches)
@@ -470,6 +467,81 @@ fn check_duplicate_children(node : SourceNode) -> Unit raise ParseError {
       check_duplicate_children(child)
     }
   }
+}
+
+///|
+/// Applies one top-level `/delete-node/ &label;` or `&{/path};` to the tree
+/// built so far.
+///
+/// Resolving and marking here rather than in a final pass is what makes the
+/// directive behave like dtc's: the grammar action runs the deletion the moment
+/// it reduces, so a later root block merges into a node that is already flagged
+/// and revives it, exactly as it would for the bare-name form. An unknown
+/// target is an error, which is the reference form's behaviour and not the
+/// bare-name form's.
+fn apply_reference_deletion(
+  root : SourceNode,
+  marker : SourceNode,
+) -> SourceNode raise ParseError {
+  let labels = collect_label_paths(root)
+  let target = marker.name
+  let path = if target.has_prefix("&{") {
+    target[2:target.length() - 1].to_owned()
+  } else if target.has_prefix("&") {
+    let label = target[1:].to_owned()
+    match labels.get(label) {
+      Some(p) => p
+      None =>
+        raise BadValue(detail="/delete-node/ names unknown label '\{label}'", span={
+          line: 1,
+          column: 1,
+        })
+    }
+  } else {
+    raise BadValue(
+      detail="/delete-node/ needs '&label' or '&{/path}', found '\{target}'",
+      span={ line: 1, column: 1, },
+    )
+  }
+  let segments = path_segments(path)
+  // An empty path cannot name a node: the root is never deletable, because
+  // there has to be a tree left to write.
+  if segments.length() == 0 {
+    raise BadValue(detail="/delete-node/ cannot name the root node", span={
+      line: 1,
+      column: 1,
+    })
+  }
+  mark_by_path(root, segments, 0)
+}
+
+///|
+/// Flags the node at `segments` as deleted, leaving it in place.
+///
+/// Returns the tree unchanged when the path does not resolve. The caller has
+/// already rejected an unknown label; a label that resolves to a path whose
+/// node has since been deleted is the same case as a marker naming a sibling
+/// that is not there, and dtc treats both as a no-op.
+fn mark_by_path(
+  node : SourceNode,
+  segments : Array[String],
+  depth : Int32,
+) -> SourceNode {
+  let want = segments[depth]
+  let last = depth == segments.length() - 1
+  let children : Array[SourceNode] = []
+  for child in node.children {
+    if child.is_delete || child.name != want {
+      children.push(child)
+      continue
+    }
+    if last {
+      children.push({ ..child, is_delete: true, })
+    } else {
+      children.push(mark_by_path(child, segments, depth + 1))
+    }
+  }
+  { ..node, children, }
 }
 
 ///|
@@ -1646,39 +1718,26 @@ fn merge_source_node(node : SourceNode, patch : SourceNode) -> SourceNode {
 /// The removal looks at what has been merged so far, so
 ///
 ///     /delete-node/ a@1;   a@1 { ... };    // the node survives
-///     a@1 { ... };         /delete-node/ a@1;   // the node is removed
+///     a@1 { ... };         /delete-node/ a@1;   // the node is a duplicate
 ///
-/// differ, which is dtc's behaviour and is not obvious from the grammar.
+/// differ. The first leaves a tombstone that the duplicate check skips; the
+/// second leaves a live node followed by a tombstone of the same name, which
+/// dtc's asymmetric check reports as an error. That second outcome is not a
+/// deletion at all, which is the part that reads as a bug.
 ///
-/// Two further details come from `delete_node` and `merge_nodes` in dtc's
-/// `livetree.c` and are easy to get wrong:
-///
-/// * `delete_node` marks the target deleted without unlinking it. A later child
-///   of the same name still finds the marker in the list and merges into it,
-///   which is why a node deleted and then re-declared keeps the properties it
-///   had before the deletion.
-/// * The marker is appended like any other child, so it also lands when a
-///   parent holds no node of that name: a `/delete-node/ typo@1` is silently a
-///   no-op, not an error.
+/// A marker whose name matches no sibling is a silent no-op rather than an
+/// error: the reference form at top level is the one that rejects an unknown
+/// target.
 fn absorb_child(
   children : Array[SourceNode],
   incoming : SourceNode,
 ) -> Array[SourceNode] {
   if incoming.is_delete {
-    let mut landed = false
     for i in 0..<children.length() {
       if children[i].name == incoming.name {
         children[i] = mark_deleted(children[i])
-        landed = true
         break
       }
-    }
-    // A marker for a sibling declared after it stays in the list as a tombstone
-    // so that the later declaration merges into an already-deleted node, which
-    // is the only way to reproduce dtc's "deleted, then re-declared keeps the
-    // old properties" rule with a list that preserves order.
-    if !landed {
-      children.push(incoming)
     }
     return children
   }
