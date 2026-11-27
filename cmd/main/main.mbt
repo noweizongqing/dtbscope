@@ -124,7 +124,7 @@ fn main {
   }
   match mode {
     Help => println(usage())
-    Version => println("dtbscope 0.3.1")
+    Version => println("dtbscope 0.4.0")
     Dump(path) => {
       let blob = @fs.read_file_to_bytes(path) catch {
         _ => {
